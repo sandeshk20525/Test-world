@@ -144,9 +144,47 @@ jobs:
       - name: Create Magisk Modules
         if: env.SKIP_BUILD != 'true'
         run: |
-          # Magisk, KernelSU aur APatch compatibility ke liye official template download karna
-          git clone https://github.com/LSPosed/magisk-module-template.git template
-          rm -rf template/.git template/.github template/README.md
+          # Kisi dusre ki repo par depend hone ki bajaye hum apna khud ka Magisk Template banayenge
+          mkdir -p template/META-INF/com/google/android
+          touch template/META-INF/com/google/android/updater-script
+          
+          cat << 'EOF' > template/META-INF/com/google/android/update-binary
+          #!/system/bin/sh
+          OUTFD=$2
+          ZIPFILE=$3
+          
+          ui_print() {
+            echo -n -e "ui_print $1\n" >&$OUTFD
+            echo -n -e "ui_print\n" >&$OUTFD
+          }
+          
+          ui_print "- Installing Morphe Module..."
+          
+          # Auto Root Manager Detection
+          if [ -d "/data/adb/ksu" ]; then
+              MODDIR="/data/adb/ksu/modules"
+          elif [ -d "/data/adb/ap" ]; then
+              MODDIR="/data/adb/ap/modules"
+          else
+              MODDIR="/data/adb/modules"
+          fi
+          
+          MODID=$(grep '^id=' "$ZIPFILE" | head -n1 | cut -d= -f2 | tr -d '\r')
+          MODPATH="$MODDIR/$MODID"
+          
+          ui_print "- Extracting App..."
+          rm -rf "$MODPATH"
+          mkdir -p "$MODPATH"
+          unzip -o "$ZIPFILE" -x "META-INF/*" -d "$MODPATH" >&2
+          
+          ui_print "- Setting Permissions..."
+          chmod -R 755 "$MODPATH"
+          find "$MODPATH" -type f -exec chmod 644 {} +
+          
+          ui_print "- Installation Successful! Please Reboot."
+          exit 0
+          EOF
+          chmod +x template/META-INF/com/google/android/update-binary
           
           # YouTube Magisk Module
           cp -r template yt-magisk
