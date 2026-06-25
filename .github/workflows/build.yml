@@ -207,7 +207,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v1.0.${{ github.run_number }}"
-          name: "Morphe Latest Builds - ${{ env.BUILD_DATE }}"
+          name: "morphe ${{ env.BUILD_DATE }}"
           body_path: release_notes.txt
           files: |
             *-NonRoot.apk
