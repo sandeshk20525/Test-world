@@ -1,7 +1,7 @@
 name: Build Morphe APKs and Magisk Modules
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Manual run ke liye (Ye hamesha build karega)
   schedule:
     # Ye script har din automatic run hogi (raat 10:30 UTC = subah 4:00 IST)
     - cron: '30 22 * * *'
@@ -22,8 +22,9 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
-      - name: Download Morphe Tools
+      - name: Download Tools & Check For Updates
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p tools
@@ -32,111 +33,117 @@ jobs:
           CLI_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest | grep "browser_download_url.*\.jar" | cut -d '"' -f 4 | head -n 1)
           CLI_FILENAME=$(basename "$CLI_URL")
           echo "CLI_FILENAME=$CLI_FILENAME" >> $GITHUB_ENV
-          echo "Found CLI URL: $CLI_URL"
           wget -qO tools/cli.jar "$CLI_URL"
           
           echo "Downloading Patches..."
           PATCHES_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest | grep "browser_download_url" | grep -E "\.jar|\.rvp|\.mpp" | cut -d '"' -f 4 | head -n 1)
           PATCH_FILENAME=$(basename "$PATCHES_URL")
           echo "PATCH_FILENAME=$PATCH_FILENAME" >> $GITHUB_ENV
-          echo "Found Patches URL: $PATCHES_URL"
           wget -qO tools/patches.jar "$PATCHES_URL"
           
-          ls -lh tools/
           if [ ! -s tools/cli.jar ] || [ ! -s tools/patches.jar ]; then 
             echo "Error: Tools download failed or file empty!"; exit 1; 
           fi
-          echo "Tools verified successfully."
+          
+          # Smart Check: Sirf tabhi automatic build hoga jab naya patch available ho
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+             echo "Scheduled run triggered. Checking if patch is new..."
+             LAST_PATCH=$(gh release view --json body -q ".body" 2>/dev/null | grep -oP '\*\*Patches:\*\* MorpheApp/\K[a-zA-Z0-9_.-]+' || true)
+             
+             if [ "$LAST_PATCH" == "$PATCH_FILENAME" ] && [ -n "$LAST_PATCH" ]; then
+                 echo "No new patch found ($PATCH_FILENAME). Skipping today's build."
+                 echo "SKIP_BUILD=true" >> $GITHUB_ENV
+             else
+                 echo "New patch release found! Proceeding with build."
+                 echo "SKIP_BUILD=false" >> $GITHUB_ENV
+             fi
+          else
+             echo "Manual run triggered. Proceeding with build unconditionally."
+             echo "SKIP_BUILD=false" >> $GITHUB_ENV
+          fi
 
-      - name: Download Original APKs (Dynamic Safe Mode)
+      - name: Download Original APKs & Extract Real Versions
+        if: env.SKIP_BUILD != 'true'
         run: |
           mkdir -p apks
+          # aapt tool install karna zaroori hai real version nikalne ke liye
+          sudo apt-get update -yqq && sudo apt-get install -y aapt
           
-          echo "Fetching dynamic links from Archive API..."
+          echo "Fetching dynamic links from Archive API for Multiple Architectures..."
           
-          # YouTube Download
-          YT_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep "\.apk$" | sort | tail -n 1)
-          if [ -z "$YT_PATH" ]; then echo "YouTube APK not found!"; exit 1; fi
-          echo "Downloading YouTube: $YT_PATH"
-          curl -f -L -s "https://archive.org/download/jhc-apks/$YT_PATH" -o apks/youtube.apk
-          echo "YT_CLEAN_NAME=$(basename "$YT_PATH" .apk)" >> $GITHUB_ENV
-          
-          # YT Music Download
-          YTM_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep "\.apk$" | sort | tail -n 1)
-          if [ -z "$YTM_PATH" ]; then echo "YT Music APK not found!"; exit 1; fi
-          echo "Downloading YT Music: $YTM_PATH"
-          curl -f -L -s "https://archive.org/download/jhc-apks/$YTM_PATH" -o apks/ytmusic.apk
-          echo "YTM_CLEAN_NAME=$(basename "$YTM_PATH" .apk)" >> $GITHUB_ENV
+          # 1. YouTube ARM64
+          YT_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep -i "arm64-v8a" | grep "\.apk$" | sort | tail -n 1)
+          if [ -z "$YT_ARM64_PATH" ]; then
+             # Agar arm64 alag se na mile, toh universal (all) apk utha lo
+             YT_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep "\.apk$" | sort | tail -n 1)
+          fi
+          if [ -n "$YT_ARM64_PATH" ]; then
+             echo "Downloading YouTube ARM64: $YT_ARM64_PATH"
+             curl -f -L -s "https://archive.org/download/jhc-apks/$YT_ARM64_PATH" -o apks/youtube_arm64.apk
+             YT_VER=$(aapt dump badging apks/youtube_arm64.apk | grep -oP "versionName='\K[^']+" | head -1)
+             echo "YT_CLEAN_NAME=YouTube-v$YT_VER" >> $GITHUB_ENV
+          else
+             echo "YouTube APK not found!"; exit 1;
+          fi
 
-          echo "--- Scanning for Reddit APK ---"
-          REDDIT_DOWNLOADED=false
-          
-          echo "Trying Source 1 (Archive.org Dynamic)..."
-          REDDIT_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "reddit" | grep "\.apk$" | sort | tail -n 1)
-          if [ -n "$REDDIT_PATH" ]; then
-             echo "Found Reddit: $REDDIT_PATH"
-             curl -f -L -s "https://archive.org/download/jhc-apks/$REDDIT_PATH" -o apks/reddit_tmp.apk || true
-             if [ -s apks/reddit_tmp.apk ] && unzip -t apks/reddit_tmp.apk >/dev/null 2>&1; then
-                mv apks/reddit_tmp.apk apks/reddit.apk
-                REDDIT_DOWNLOADED=true
-                echo "Success: Downloaded Reddit from Archive.org"
-             fi
+          # 2. YouTube ARMv7
+          YT_ARMV7_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep -i "armeabi-v7a" | grep "\.apk$" | sort | tail -n 1)
+          if [ -z "$YT_ARMV7_PATH" ]; then
+             echo "ARMv7 not explicitly found, falling back to ARM64/Universal source..."
+             YT_ARMV7_PATH=$YT_ARM64_PATH
           fi
-          
-          if [ "$REDDIT_DOWNLOADED" = false ]; then
-             echo "Trying Source 2 (APKMirror)..."
-             curl -f -L -s "https://www.apkmirror.com/apk/redditinc/reddit/" -o apks/reddit_tmp.apk || true
-             if [ -s apks/reddit_tmp.apk ] && unzip -t apks/reddit_tmp.apk >/dev/null 2>&1; then
-                mv apks/reddit_tmp.apk apks/reddit.apk
-                REDDIT_DOWNLOADED=true
-                echo "Success: Downloaded Reddit from APKMirror"
-             fi
+          echo "Downloading YouTube ARMv7: $YT_ARMV7_PATH"
+          curl -f -L -s "https://archive.org/download/jhc-apks/$YT_ARMV7_PATH" -o apks/youtube_armv7.apk
+
+          # 3. YT Music ARM64
+          YTM_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep -i "arm64-v8a" | grep "\.apk$" | sort | tail -n 1)
+          if [ -z "$YTM_ARM64_PATH" ]; then
+             YTM_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep "\.apk$" | sort | tail -n 1)
           fi
-          
-          if [ "$REDDIT_DOWNLOADED" = false ]; then
-             echo "Trying Source 3 (Uptodown)..."
-             curl -f -L -s "https://reddit-official-app.en.uptodown.com/android/download" -o apks/reddit_tmp.apk || true
-             if [ -s apks/reddit_tmp.apk ] && unzip -t apks/reddit_tmp.apk >/dev/null 2>&1; then
-                mv apks/reddit_tmp.apk apks/reddit.apk
-                REDDIT_DOWNLOADED=true
-                echo "Success: Downloaded Reddit from Uptodown"
-             fi
+          if [ -n "$YTM_ARM64_PATH" ]; then
+             echo "Downloading YT Music ARM64: $YTM_ARM64_PATH"
+             curl -f -L -s "https://archive.org/download/jhc-apks/$YTM_ARM64_PATH" -o apks/ytmusic_arm64.apk
+             YTM_VER=$(aapt dump badging apks/ytmusic_arm64.apk | grep -oP "versionName='\K[^']+" | head -1)
+             echo "YTM_CLEAN_NAME=YTMusic-v$YTM_VER" >> $GITHUB_ENV
+          else
+             echo "YT Music APK not found!"; exit 1;
           fi
-          
-          if [ "$REDDIT_DOWNLOADED" = false ]; then
-             echo "Warning: All sources failed. Reddit patching will be skipped."
-             rm -f apks/reddit_tmp.apk
+
+          # 4. YT Music ARMv7
+          YTM_ARMV7_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep -i "armeabi-v7a" | grep "\.apk$" | sort | tail -n 1)
+          if [ -z "$YTM_ARMV7_PATH" ]; then
+             YTM_ARMV7_PATH=$YTM_ARM64_PATH
           fi
+          echo "Downloading YT Music ARMv7: $YTM_ARMV7_PATH"
+          curl -f -L -s "https://archive.org/download/jhc-apks/$YTM_ARMV7_PATH" -o apks/ytmusic_armv7.apk
 
       - name: Build Non-Root APKs
+        if: env.SKIP_BUILD != 'true'
         run: |
-          echo "Patching YouTube Non-Root..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YT_CLEAN_NAME}-NonRoot.apk" apks/youtube.apk
-          echo "Patching YT Music Non-Root..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YTM_CLEAN_NAME}-NonRoot.apk" apks/ytmusic.apk
+          echo "Patching YouTube Non-Root (ARM64)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YT_CLEAN_NAME}-arm64-v8a-NonRoot.apk" apks/youtube_arm64.apk
           
-          if [ -f "apks/reddit.apk" ]; then
-             echo "Patching Reddit Non-Root..."
-             java -jar tools/cli.jar patch -p tools/patches.jar -o "Reddit-NonRoot.apk" apks/reddit.apk || echo "Reddit patching failed, skipping..."
-          else
-             echo "Reddit APK not found. Skipping Reddit Non-Root patching."
-          fi
+          echo "Patching YouTube Non-Root (ARMv7)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YT_CLEAN_NAME}-armeabi-v7a-NonRoot.apk" apks/youtube_armv7.apk
+          
+          echo "Patching YT Music Non-Root (ARM64)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YTM_CLEAN_NAME}-arm64-v8a-NonRoot.apk" apks/ytmusic_arm64.apk
+          
+          echo "Patching YT Music Non-Root (ARMv7)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YTM_CLEAN_NAME}-armeabi-v7a-NonRoot.apk" apks/ytmusic_armv7.apk
 
       - name: Build Root APKs (For Magisk)
+        if: env.SKIP_BUILD != 'true'
         run: |
+          # Root ke liye hum default ARM64 wala source use karenge kyunki Magisk wale zyada tar 64-bit devices hote hain
           echo "Patching YouTube Root (GmsCore excluded)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YouTube-Root.apk apks/youtube.apk
-          echo "Patching YT Music Root (GmsCore excluded)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YTMusic-Root.apk apks/ytmusic.apk
+          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YouTube-Root.apk apks/youtube_arm64.apk
           
-          if [ -f "apks/reddit.apk" ]; then
-             echo "Patching Reddit Root..."
-             java -jar tools/cli.jar patch -p tools/patches.jar -o Reddit-Root.apk apks/reddit.apk || echo "Reddit root patching failed, skipping..."
-          else
-             echo "Reddit APK not found. Skipping Reddit Root patching."
-          fi
+          echo "Patching YT Music Root (GmsCore excluded)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YTMusic-Root.apk apks/ytmusic_arm64.apk
 
       - name: Create Magisk Modules
+        if: env.SKIP_BUILD != 'true'
         run: |
           # YouTube Magisk Module
           mkdir -p yt-magisk/system/product/app/YouTube
@@ -165,19 +172,17 @@ jobs:
           cd ytm-magisk && zip -r9 "../${YTM_CLEAN_NAME}.zip" . && cd ..
 
       - name: Generate Release Notes
+        if: env.SKIP_BUILD != 'true'
         run: |
-          if [ -f "apks/reddit.apk" ]; then
-            REDDIT_TEXT="Included"
-          else
-            REDDIT_TEXT="Skipped"
-          fi
+          # IST Date nikal kar environment variable me save karna
+          BUILD_DATE=$(TZ='Asia/Kolkata' date +'%d %B %Y')
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           
           cat <<EOF > release_notes.txt
           🚀 **New Morphe Build**
           
           📱 **YouTube:** $YT_CLEAN_NAME
           🎵 **YouTube Music:** $YTM_CLEAN_NAME
-          🤖 **Reddit:** $REDDIT_TEXT
           
           ---
           
@@ -198,32 +203,14 @@ jobs:
           EOF
 
       - name: Create GitHub Release
-        id: create_release
+        if: env.SKIP_BUILD != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v1.0.${{ github.run_number }}"
-          name: "Morphe Patched Builds #${{ github.run_number }}"
+          name: "Morphe Latest Builds - ${{ env.BUILD_DATE }}"
           body_path: release_notes.txt
           files: |
-            *NonRoot.apk
+            *-NonRoot.apk
             *.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # NAYA STEP: Telegram par notification bhejne ke liye
-      - name: Send Telegram Notification
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_TO }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
-          format: markdown
-          message: |
-            🚀 *New Morphe Build is Ready!*
-            
-            📱 *YouTube:* `${{ env.YT_CLEAN_NAME }}`
-            🎵 *YT Music:* `${{ env.YTM_CLEAN_NAME }}`
-            
-            📥 *Download Links:*
-            [Click here to Download APKs & Magisk Modules](https://github.com/${{ github.repository }}/releases/tag/v1.0.${{ github.run_number }})
-            
-            _Note: Files are hosted on GitHub to bypass Telegram's 50MB bot upload limit._
