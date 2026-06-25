@@ -1,0 +1,136 @@
+name: Build Morphe APKs and Magisk Modules
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      - name: Download Morphe Tools
+        run: |
+          mkdir -p tools
+          
+          echo "Downloading CLI..."
+          CLI_URL=$(curl -s https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest | grep "browser_download_url.*\.jar" | cut -d '"' -f 4 | head -n 1)
+          wget -qO tools/cli.jar "$CLI_URL"
+          
+          echo "Downloading Patches..."
+          PATCHES_URL=$(curl -s https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest | grep "browser_download_url" | grep -E "\.jar|\.rvp" | cut -d '"' -f 4 | head -n 1)
+          wget -qO tools/patches.jar "$PATCHES_URL"
+          
+          # Verification
+          if [ ! -s tools/cli.jar ] || [ ! -s tools/patches.jar ]; then 
+            echo "Error: Tools download failed or file empty!"; exit 1; 
+          fi
+          echo "Tools verified successfully."
+
+      - name: Download Original APKs (Safe Mode)
+        run: |
+          mkdir -p apks
+          # Added -f and -L flags to curl so it fails properly if link is broken instead of saving a 404 HTML page
+          echo "Downloading YouTube APK..."
+          curl -f -L -s "https://archive.org/download/jhc-apks/apks/com.google.android.youtube/youtube_v19.16.39.apk" -o apks/youtube.apk
+          
+          echo "Downloading YT Music APK..."
+          curl -f -L -s "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music/ytmusic_v7.05.51.apk" -o apks/ytmusic.apk
+
+          echo "--- Scanning for Reddit APK ---"
+          REDDIT_DOWNLOADED=false
+          
+          echo "Trying Source 1 (APKMirror)..."
+          # '|| true' ensures that workflow doesn't crash on curl error
+          curl -f -L -s "https://www.apkmirror.com/apk/redditinc/reddit/" -o apks/reddit_tmp.apk || true
+          # 'unzip -t' strictly verifies that the downloaded file is a valid APK, not an HTML error page
+          if [ -s apks/reddit_tmp.apk ] && unzip -t apks/reddit_tmp.apk >/dev/null 2>&1; then
+             mv apks/reddit_tmp.apk apks/reddit.apk
+             REDDIT_DOWNLOADED=true
+             echo "Success: Downloaded Reddit from APKMirror"
+          else
+             echo "Failed at Source 1 (File unavailable or not a valid APK)"
+          fi
+          
+          if [ "$REDDIT_DOWNLOADED" = false ]; then
+             echo "Trying Source 2 (Archive.org)..."
+             curl -f -L -s "https://archive.org/download/jhc-apks/apks/com.reddit.frontpage/com.reddit.frontpage-2026.14.0-all.apk" -o apks/reddit_tmp.apk || true
+             if [ -s apks/reddit_tmp.apk ] && unzip -t apks/reddit_tmp.apk >/dev/null 2>&1; then
+                mv apks/reddit_tmp.apk apks/reddit.apk
+                REDDIT_DOWNLOADED=true
+                echo "Success: Downloaded Reddit from Archive.org"
+             else
+                echo "Failed at Source 2 (File unavailable or not a valid APK)"
+             fi
+          fi
+          
+          if [ "$REDDIT_DOWNLOADED" = false ]; then
+             echo "Trying Source 3 (Uptodown)..."
+             curl -f -L -s "https://reddit-official-app.en.uptodown.com/android/download" -o apks/reddit_tmp.apk || true
+             if [ -s apks/reddit_tmp.apk ] && unzip -t apks/reddit_tmp.apk >/dev/null 2>&1; then
+                mv apks/reddit_tmp.apk apks/reddit.apk
+                REDDIT_DOWNLOADED=true
+                echo "Success: Downloaded Reddit from Uptodown"
+             else
+                echo "Failed at Source 3 (File unavailable or not a valid APK)"
+             fi
+          fi
+          
+          if [ "$REDDIT_DOWNLOADED" = false ]; then
+             echo "Warning: All 3 sources failed. Reddit patching will be skipped."
+             rm -f apks/reddit_tmp.apk
+          fi
+
+      - name: Build Non-Root APKs
+        run: |
+          echo "Patching YouTube Non-Root..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YouTube-NonRoot.apk apks/youtube.apk
+          echo "Patching YT Music Non-Root..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YTMusic-NonRoot.apk apks/ytmusic.apk
+          
+          if [ -f "apks/reddit.apk" ]; then
+             echo "Patching Reddit Non-Root..."
+             java -jar tools/cli.jar patch -p tools/patches.jar -o Reddit-NonRoot.apk apks/reddit.apk || echo "Reddit patching failed, skipping..."
+          else
+             echo "Reddit APK not found. Skipping Reddit Non-Root patching."
+          fi
+
+      - name: Build Root APKs (For Magisk)
+        run: |
+          echo "Patching YouTube Root (GmsCore excluded)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YouTube-Root.apk apks/youtube.apk
+          echo "Patching YT Music Root (GmsCore excluded)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YTMusic-Root.apk apks/ytmusic.apk
+          
+          if [ -f "apks/reddit.apk" ]; then
+             echo "Patching Reddit Root..."
+             java -jar tools/cli.jar patch -p tools/patches.jar -o Reddit-Root.apk apks/reddit.apk || echo "Reddit root patching failed, skipping..."
+          else
+             echo "Reddit APK not found. Skipping Reddit Root patching."
+          fi
+
+      - name: Create Magisk Modules
+        run: |
+          # Simple folder structure for Magisk
+          mkdir -p yt-magisk/system/product/app/YouTube && cp YouTube-Root.apk yt-magisk/system/product/app/YouTube/YouTube.apk
+          echo -e "id=morphe.yt\nname=YouTube Morphe\nversion=1.0\nauthor=Builder" > yt-magisk/module.prop
+          cd yt-magisk && zip -r9 ../YouTube-Magisk.zip . && cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "v1.0.${{ github.run_number }}"
+          files: |
+            *.apk
+            *.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
