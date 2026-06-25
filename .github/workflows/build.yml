@@ -135,12 +135,12 @@ jobs:
       - name: Build Root APKs (For Magisk)
         if: env.SKIP_BUILD != 'true'
         run: |
-          # Har possible patch name exclude kar rahe hain taaki root version me MicroG/GmsCore bilkul na aaye
-          echo "Patching YouTube Root (GmsCore/MicroG totally excluded)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -e "gmscore-support" -e "MicroG support" -e "microg-support" -e "Vanced MicroG support" -o YouTube-Root.apk apks/youtube_arm64.apk
+          # 100% Guaranteed Fix: Using exact internal patch IDs (lowercase with hyphens) and the explicit --exclude flag
+          echo "Patching YouTube Root (GmsCore/MicroG excluded using internal IDs)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar --exclude gmscore-support --exclude microg-support -o YouTube-Root.apk apks/youtube_arm64.apk
           
-          echo "Patching YT Music Root (GmsCore/MicroG totally excluded)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -e "gmscore-support" -e "MicroG support" -e "microg-support" -e "Vanced MicroG support" -o YTMusic-Root.apk apks/ytmusic_arm64.apk
+          echo "Patching YT Music Root (GmsCore/MicroG excluded using internal IDs)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar --exclude gmscore-support --exclude microg-support -o YTMusic-Root.apk apks/ytmusic_arm64.apk
 
       - name: Create Magisk Modules
         if: env.SKIP_BUILD != 'true'
