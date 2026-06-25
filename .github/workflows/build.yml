@@ -120,12 +120,21 @@ jobs:
       - name: Create Magisk Modules
         run: |
           # Simple folder structure for Magisk
-          mkdir -p yt-magisk/system/product/app/YouTube && cp YouTube-Root.apk yt-magisk/system/product/app/YouTube/YouTube.apk
-          echo -e "id=morphe.yt\nname=YouTube Morphe\nversion=1.0\nauthor=Builder" > yt-magisk/module.prop
+          mkdir -p yt-magisk/system/product/app/YouTube
+          cp YouTube-Root.apk yt-magisk/system/product/app/YouTube/YouTube.apk
+          
+          # Writing module.prop safely
+          cat <<EOF > yt-magisk/module.prop
+          id=morphe.yt
+          name=YouTube Morphe
+          version=1.0
+          author=Builder
+          EOF
+          
           cd yt-magisk && zip -r9 ../YouTube-Magisk.zip . && cd ..
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: "v1.0.${{ github.run_number }}"
           files: |
@@ -133,4 +142,3 @@ jobs:
             *.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
