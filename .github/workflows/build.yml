@@ -132,32 +132,30 @@ jobs:
               local SEARCH_STR=$6
               
               mkdir -p "$DIR/META-INF/com/google/android"
-              touch "$DIR/META-INF/com/google/android/updater-script"
               
-              # Standard Magisk update-binary wrapper
+              # Official Magisk #MAGISK Header (Ye KernelSU ko force karega apna internal installer use karne ke liye)
               cat << 'EOF' > "$DIR/META-INF/com/google/android/update-binary"
           #!/system/bin/sh
+          #MAGISK
           OUTFD=$2
           ZIPFILE=$3
-          unzip -qo "$ZIPFILE" 'customize.sh' -d /dev/tmp
-          unzip -qo "$ZIPFILE" 'module.prop' -d /dev/tmp
-          if [ -d "/data/adb/ksu" ]; then MODDIR="/data/adb/ksu/modules"; elif [ -d "/data/adb/ap" ]; then MODDIR="/data/adb/ap/modules"; else MODDIR="/data/adb/modules"; fi
-          MODID=$(grep '^id=' /dev/tmp/module.prop | cut -d= -f2 | tr -d '\r')
-          MODPATH="$MODDIR/$MODID"
-          rm -rf "$MODPATH"
-          mkdir -p "$MODPATH"
-          unzip -qo "$ZIPFILE" -d "$MODPATH"
-          if [ -f "$MODPATH/customize.sh" ]; then
-              sh "$MODPATH/customize.sh" "$OUTFD" "$ZIPFILE" "$MODPATH"
-          fi
-          exit 0
+          ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
+          ui_print "- Error: Root manager too old!"
+          exit 1
           EOF
               
-              # Ultimate customize.sh (Like Telegram modules)
+              echo "#MAGISK" > "$DIR/META-INF/com/google/android/updater-script"
+              
+              # Ultimate customize.sh (With set +e to bypass KernelSU strict error checking crash)
               cat << 'EOF' > "$DIR/customize.sh"
           #!/system/bin/sh
+          # CRUCIAL FIX: set +e disables abort-on-error. Iske bina KernelSU choti si galti par crash (Error 1) de deta hai.
+          set +e
+          
           OUTFD=$1
+          ZIPFILE=$2
           MODPATH=$3
+          
           ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
           
           ui_print "***********************************"
@@ -169,8 +167,9 @@ jobs:
           
           ui_print "- Extracting Native Libs..."
           mkdir -p "$MODPATH/lib/arm64-v8a" "$MODPATH/lib/armeabi-v7a"
-          unzip -jo "$MODPATH/app.apk" "lib/arm64-v8a/*" -d "$MODPATH/lib/arm64-v8a" >/dev/null 2>&1
-          unzip -jo "$MODPATH/app.apk" "lib/armeabi-v7a/*" -d "$MODPATH/lib/armeabi-v7a" >/dev/null 2>&1
+          # || true lagaya hai taaki agar 32-bit libs na mile toh script crash na ho
+          unzip -jo "$MODPATH/app.apk" "lib/arm64-v8a/*" -d "$MODPATH/lib/arm64-v8a" >/dev/null 2>&1 || true
+          unzip -jo "$MODPATH/app.apk" "lib/armeabi-v7a/*" -d "$MODPATH/lib/armeabi-v7a" >/dev/null 2>&1 || true
           
           ui_print "- Detecting System Architecture & Paths..."
           SYSPATH=""
@@ -186,27 +185,27 @@ jobs:
               MOD_SYSPATH="$MODPATH$SYSPATH"
               mkdir -p "$MOD_SYSPATH"
               
-              # Find original apk name (e.g. YouTube.apk or base.apk)
-              APK_NAME=$(basename $(ls $SYSPATH/*.apk 2>/dev/null | head -n 1))
+              APK_NAME=$(basename $(ls $SYSPATH/*.apk 2>/dev/null | head -n 1) 2>/dev/null)
               if [ -z "$APK_NAME" ] || [ "$APK_NAME" = "*" ]; then APK_NAME="base.apk"; fi
               
               mv "$MODPATH/app.apk" "$MOD_SYSPATH/$APK_NAME"
               
-              ui_print "- Downgrade detected, uninstalling Play Store updates..."
-              pm uninstall "$PKGNAME" >/dev/null 2>&1
-              pm uninstall --user 0 "$PKGNAME" >/dev/null 2>&1
+              ui_print "- Auto-Downgrading Play Store version..."
+              pm uninstall "$PKGNAME" >/dev/null 2>&1 || true
+              pm uninstall --user 0 "$PKGNAME" >/dev/null 2>&1 || true
           else
-              ui_print "- No System app found! Using Auto-Bind-Mount mode..."
+              ui_print "- No System app found! Using Bind-Mount mode..."
           fi
           
           ui_print "- Setting module permissions..."
           chmod -R 755 "$MODPATH"
           find "$MODPATH" -type f -exec chmod 644 {} +
-          chmod 755 "$MODPATH/post-fs-data.sh" 2>/dev/null
+          chmod 755 "$MODPATH/post-fs-data.sh" 2>/dev/null || true
           
           ui_print "- Done! Module installed successfully."
+          exit 0
           EOF
-          
+              
               # module.prop
               echo -e "id=$ID\npackage=$PKG_NAME\nsearch=$SEARCH_STR\nname=$APP_NAME Morphe (Advanced Root)\nversion=1.0\nauthor=${{ github.actor }}\ndescription=Morphe patched $APP_NAME. Auto-downgrades and dynamically mounts universally." > "$DIR/module.prop"
               
