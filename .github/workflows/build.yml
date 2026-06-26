@@ -103,11 +103,6 @@ jobs:
 
       - name: Build Root APKs (For Magisk)
         run: |
-          # Declare a Bash array for dynamic exclude arguments
-          declare -a EXCLUDE_ARGS=()
-          
-          echo "Scanning patches to dynamically exclude MicroG RE/GmsCore/Custom Package related patches..."
-          
           # Failsafe Patch Listing (tries multiple parameters to never exit with code 2)
           if ! java -jar tools/cli.jar list-patches --patches tools/patches.jar > patches_list.txt 2>/dev/null; then
             if ! java -jar tools/cli.jar list-patches -p tools/patches.jar > patches_list.txt 2>/dev/null; then
@@ -115,34 +110,81 @@ jobs:
             fi
           fi
           
-          # Read list and add any MicroG-RE/GmsCore/GMS/Package Name related patches to array with '-d' (to disable them)
-          while IFS= read -r line; do
-            if echo "$line" | grep -qiE "gmscore|microg|package name|custom branding|custom package|gms"; then
-              CLEAN_NAME=$(echo "$line" | sed -E 's/^(INFO: |Name: |- |Patch: |  Name: )//I' | sed -E 's/ \((experimental|recommended)\)//I' | sed -E 's/^"|"$//g' | xargs)
-              if [ -n "$CLEAN_NAME" ]; then
-                echo "Adding dynamic exclusion: $CLEAN_NAME"
-                EXCLUDE_ARGS+=("-d" "$CLEAN_NAME")
-              fi
-            fi
-          done < patches_list.txt
+          # Initialize separate clean arrays for YouTube and YT Music
+          declare -a YT_ARGS=()
+          declare -a YTM_ARGS=()
           
-          # Fallback standard exclusions using '-d' (to disable GmsCore/MicroG requirements)
-          FALLBACKS=(
+          # Helper function to safely add fallback exclusions ONLY if they exist in the patch bundle
+          safe_add_exclude() {
+              local patch_name=$1
+              declare -n ret_array=$2
+              if grep -qi "$patch_name" patches_list.txt; then
+                  ret_array+=("-d" "$patch_name")
+              fi
+          }
+          
+          # Dynamic exclusion parser based on strict package name compatibility
+          get_exclusions() {
+              local target_pkg=$1
+              declare -n ret_array=$2
+              local current_patch=""
+              local is_compatible=false
+              
+              while IFS= read -r line; do
+                  if echo "$line" | grep -q "^Name: "; then
+                      current_patch=$(echo "$line" | sed -E 's/^(INFO: |Name: |- |Patch: |  Name: )//I' | sed -E 's/ \((experimental|recommended)\)//I' | sed -E 's/^"|"$//g' | xargs)
+                      is_compatible=false
+                  fi
+                  if echo "$line" | grep -q "Compatible packages:"; then
+                      if echo "$line" | grep -q "$target_pkg"; then
+                          is_compatible=true
+                      fi
+                  fi
+                  if [ "$is_compatible" = true ] && [ -n "$current_patch" ]; then
+                      if echo "$current_patch" | grep -qiE "gmscore|microg|package name|custom branding|custom package|gms|certificate spoof"; then
+                          ret_array+=("-d" "$current_patch")
+                          current_patch="" # Reset to prevent duplicate exclusions
+                      fi
+                  fi
+              done < patches_list.txt
+          }
+          
+          # 1. Gather isolated YouTube exclusions
+          get_exclusions "com.google.android.youtube" YT_ARGS
+          YT_FALLBACKS=(
             "GmsCore support" "gmscore-support"
             "microg-support" "MicroG support"
             "Custom branding" "custom-branding"
             "Change package name" "change-package-name"
+            "Package name of YouTube"
             "Disable Play Store updates" "disable-play-store-updates"
           )
-          for item in "${FALLBACKS[@]}"; do
-            EXCLUDE_ARGS+=("-d" "$item")
+          for item in "${YT_FALLBACKS[@]}"; do
+            safe_add_exclude "$item" YT_ARGS
+          done
+          
+          # 2. Gather isolated YouTube Music exclusions
+          get_exclusions "com.google.android.apps.youtube.music" YTM_ARGS
+          YTM_FALLBACKS=(
+            "GmsCore support" "gmscore-support"
+            "microg-support" "MicroG support"
+            "Custom package name" "custom-package-name"
+            "Custom branding" "custom-branding"
+            "Change package name" "change-package-name"
+            "Custom branding icon for YouTube Music"
+            "Custom branding name for YouTube Music"
+            "Certificate spoof" "certificate-spoof"
+            "Disable Play Store updates" "disable-play-store-updates"
+          )
+          for item in "${YTM_FALLBACKS[@]}"; do
+            safe_add_exclude "$item" YTM_ARGS
           done
           
           echo "Building YouTube Root (Native Play Services Only)..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar "${EXCLUDE_ARGS[@]}" -o YouTube-Root.apk apks/youtube.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar "${YT_ARGS[@]}" -o YouTube-Root.apk apks/youtube.apk
           
           echo "Building YT Music Root (Native Play Services Only)..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar "${EXCLUDE_ARGS[@]}" -o YTMusic-Root.apk apks/ytmusic.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar "${YTM_ARGS[@]}" -o YTMusic-Root.apk apks/ytmusic.apk
 
       - name: Create Magisk Modules
         run: |
