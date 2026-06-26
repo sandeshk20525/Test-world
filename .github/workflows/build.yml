@@ -65,34 +65,23 @@ jobs:
           mkdir -p apks
           
           echo "Fetching latest APK directory from Archive.org (jhc-apks)..."
-          # Archive.org ki metadata API ko call karke JSON save karna
           curl -sL "https://archive.org/metadata/jhc-apks" > jhc_metadata.json
           
-          # YouTube ka latest APK path extract karna (Version ke hisab se sort karke sabse naya uthana)
           YT_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*\.apk$' | sort -V | tail -n 1)
-          if [ -z "$YT_PATH" ]; then
-            echo "Error: YouTube APK directory me nahi mila!"
-            exit 1
-          fi
+          if [ -z "$YT_PATH" ]; then echo "Error: YouTube APK directory me nahi mila!"; exit 1; fi
           
-          # YT Music ka latest APK path extract karna
           YTM_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*\.apk$' | sort -V | tail -n 1)
-          if [ -z "$YTM_PATH" ]; then
-            echo "Error: YT Music APK directory me nahi mila!"
-            exit 1
-          fi
+          if [ -z "$YTM_PATH" ]; then echo "Error: YT Music APK directory me nahi mila!"; exit 1; fi
           
           echo "Found Latest YouTube: $YT_PATH"
           echo "Found Latest YT Music: $YTM_PATH"
           
-          # Dynamically banayi gayi URL se download karna
           echo "Downloading YouTube APK..."
           curl -sL "https://archive.org/download/jhc-apks/$YT_PATH" -o apks/youtube.apk
           
           echo "Downloading YT Music APK..."
           curl -sL "https://archive.org/download/jhc-apks/$YTM_PATH" -o apks/ytmusic.apk
           
-          # Verification: Ensure file size is valid (Corrupted html redirect nahi aaya)
           YT_SIZE=$(stat -c%s "apks/youtube.apk" 2>/dev/null || echo 0)
           echo "Downloaded YouTube Size: $YT_SIZE bytes"
           
@@ -112,7 +101,6 @@ jobs:
 
       - name: Build Root APKs (For Magisk)
         run: |
-          # Safe CLI syntax: input apk ko end me rakha hai aur single space ke sath exclude flags lagaye hain
           echo "Building YouTube Root..."
           java -jar tools/cli.jar patch -p tools/patches.jar -e gmscore-support -e microg-support -e custom-package-name -o YouTube-Root.apk apks/youtube.apk
           
@@ -121,7 +109,7 @@ jobs:
 
       - name: Create Magisk Modules
         run: |
-          echo "Building Ultimate Magisk/KernelSU Modules (Telegram Style)..."
+          echo "Building Ultimate Native Magisk/KernelSU Modules..."
           
           build_module() {
               local APP_NAME=$1
@@ -131,111 +119,70 @@ jobs:
               local DIR=$5
               
               mkdir -p "$DIR/META-INF/com/google/android"
-              touch "$DIR/META-INF/com/google/android/updater-script"
               
-              # 1. Authentic Telegram-Style update-binary wrapper (No fake 'exit 1' traps)
-              cat << 'EOF' > "$DIR/META-INF/com/google/android/update-binary"
-          #!/system/bin/sh
-          OUTFD=$2
-          ZIPFILE=$3
-
-          ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
-
-          ui_print "- Extracting Morphe Module..."
-
-          if [ -d "/data/adb/ksu" ]; then MODDIR="/data/adb/ksu/modules"; elif [ -d "/data/adb/ap" ]; then MODDIR="/data/adb/ap/modules"; else MODDIR="/data/adb/modules"; fi
-
-          unzip -qo "$ZIPFILE" "module.prop" -d /dev/tmp
-          MODID=$(grep '^id=' /dev/tmp/module.prop | head -n1 | cut -d= -f2 | tr -d '\r')
-          rm -f /dev/tmp/module.prop
-
-          MODPATH="$MODDIR/$MODID"
-          rm -rf "$MODPATH"
-          mkdir -p "$MODPATH"
-
-          ui_print "- Copying files..."
-          unzip -qo "$ZIPFILE" -d "$MODPATH"
-
-          ui_print "- Setting permissions..."
-          chmod -R 755 "$MODPATH"
-          find "$MODPATH" -type f -exec chmod 644 {} +
-          for f in customize.sh post-fs-data.sh uninstall.sh; do
-              [ -f "$MODPATH/$f" ] && chmod 755 "$MODPATH/$f"
-          done
-
-          if [ -f "$MODPATH/customize.sh" ]; then
-              sh "$MODPATH/customize.sh" "$OUTFD" "$ZIPFILE" "$MODPATH"
-          fi
-
-          ui_print "- Installation Complete!"
-          exit 0
+              # THE MAGIC FIX: Ye KernelSU ko force karega apna flawless internal extractor use karne ko
+              echo "#MAGISK" > "$DIR/META-INF/com/google/android/update-binary"
+              echo "#MAGISK" > "$DIR/META-INF/com/google/android/updater-script"
+              
+              cp "$APK_FILE" "$DIR/app.apk"
+              
+              # Module info
+              cat << EOF > "$DIR/module.prop"
+          id=$ID
+          name=$APP_NAME Morphe (Native Root)
+          version=1.0.0
+          versionCode=${{ github.run_number }}
+          author=${{ github.actor }}
+          description=100% Native KSU/Magisk Module. Automatically uninstalls Play Store updates and seamlessly bind-mounts.
           EOF
-          
-              # 2. customize.sh (Handles downgrade and lib extraction just like Telegram build)
-              cat << 'EOF' > "$DIR/customize.sh"
+              
+              # customize.sh (Handles Auto-Downgrade safely)
+              cat << EOF > "$DIR/customize.sh"
           #!/system/bin/sh
-          OUTFD=$1
-          ZIPFILE=$2
-          MODPATH=$3
+          SKIPUNZIP=0
           
-          ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
-          PKGNAME=$(grep '^package=' "$MODPATH/module.prop" | cut -d= -f2 | tr -d '\r')
+          ui_print "- Uninstalling Play Store updates for $APP_NAME..."
+          pm uninstall "$PKG_NAME" >/dev/null 2>&1 || true
+          pm uninstall --user 0 "$PKG_NAME" >/dev/null 2>&1 || true
           
-          ui_print "- Downgrade detected, uninstalling Play Store version..."
-          pm uninstall "$PKGNAME" >/dev/null 2>&1 || true
-          pm uninstall --user 0 "$PKGNAME" >/dev/null 2>&1 || true
-          
-          ui_print "- Extracting Native Libs..."
-          unzip -qo "$MODPATH/app.apk" "lib/*" -d "$MODPATH" 2>/dev/null || true
-          
-          ui_print "- Optimizing APK..."
+          ui_print "- Permissions applied."
           EOF
-
-              # 3. post-fs-data.sh (Handles Dynamic Bind-Mounts perfectly)
-              cat << 'EOF' > "$DIR/post-fs-data.sh"
+              
+              # post-fs-data.sh (Perfect Dynamic Mount Script)
+              cat << EOF > "$DIR/post-fs-data.sh"
           #!/system/bin/sh
-          MODDIR=${0%/*}
-          PKG=$(grep '^package=' "$MODDIR/module.prop" | cut -d= -f2 | tr -d '\r')
+          MODDIR=\${0%/*}
+          PKG="$PKG_NAME"
           
-          # Search in data/app first
-          for path in /data/app/*/$PKG-*/base.apk /data/app/$PKG-*/base.apk; do
-              if [ -f "$path" ]; then 
-                  mount -o bind "$MODDIR/app.apk" "$path"
-                  chcon u:object_r:apk_data_file:s0 "$path" 2>/dev/null
-                  exit 0
+          for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do
+              if [ -f "\$path" ]; then 
+                  mount -o bind "\$MODDIR/app.apk" "\$path"
+                  chcon u:object_r:apk_data_file:s0 "\$path" 2>/dev/null
               fi
           done
           
-          # Search in system/app as fallback
           for base in "YouTube.apk" "YTMusic.apk" "base.apk"; do
               for dir in /system/app /system/product/app /product/app /system_ext/app; do
-                  path=$(ls "$dir"/*$PKG*/*$base 2>/dev/null | head -n 1)
-                  if [ -z "$path" ]; then
-                      path=$(ls "$dir"/*YouTube*/*$base 2>/dev/null | head -n 1)
+                  path=\$(ls "\$dir"/*\$PKG*/"\$base" 2>/dev/null | head -n 1)
+                  if [ -z "\$path" ]; then
+                      path=\$(ls "\$dir"/*YouTube*/"\$base" 2>/dev/null | head -n 1)
                   fi
-                  if [ -n "$path" ] && [ -f "$path" ]; then 
-                      mount -o bind "$MODDIR/app.apk" "$path"
-                      chcon u:object_r:apk_data_file:s0 "$path" 2>/dev/null
-                      exit 0
+                  if [ -n "\$path" ] && [ -f "\$path" ]; then 
+                      mount -o bind "\$MODDIR/app.apk" "\$path"
+                      chcon u:object_r:apk_data_file:s0 "\$path" 2>/dev/null
                   fi
               done
           done
           EOF
           
-              # 4. uninstall.sh (Cleanup script)
-              cat << 'EOF' > "$DIR/uninstall.sh"
+              # uninstall.sh (Cleanup Script)
+              cat << EOF > "$DIR/uninstall.sh"
           #!/system/bin/sh
-          MODDIR=${0%/*}
-          PKG=$(grep '^package=' "$MODDIR/module.prop" | cut -d= -f2 | tr -d '\r')
-          pm uninstall "$PKG" >/dev/null 2>&1 || true
+          pm uninstall "$PKG_NAME" >/dev/null 2>&1 || true
           EOF
               
-              # Copy APK and create module.prop
-              cp "$APK_FILE" "$DIR/app.apk"
-              echo -e "id=$ID\npackage=$PKG_NAME\nname=$APP_NAME Morphe (Telegram Style)\nversion=1.0\nauthor=${{ github.actor }}\ndescription=Telegram-style advanced installer for $APP_NAME. Auto-downgrades and seamlessly mounts." > "$DIR/module.prop"
-              
+              chmod 755 "$DIR/customize.sh" "$DIR/post-fs-data.sh" "$DIR/uninstall.sh"
               cd "$DIR"
-              chmod 755 META-INF/com/google/android/update-binary customize.sh post-fs-data.sh uninstall.sh
               zip -r9 "../$ID.zip" .
               cd ..
           }
