@@ -202,7 +202,7 @@ jobs:
               cp "$APK_FILE" "$DIR/app.apk"
               cp "$STOCK_FILE" "$DIR/stock.apk"
               
-              # Module info (Safely accessed via bash environment variables)
+              # module.prop (Built safely via echo commands to prevent heredoc YAML syntax issues)
               echo "id=$ID" > "$DIR/module.prop"
               echo "name=$APP_NAME Morphe (Native Root)" >> "$DIR/module.prop"
               echo "version=1.0.0" >> "$DIR/module.prop"
@@ -210,7 +210,7 @@ jobs:
               echo "author=$ACTOR" >> "$DIR/module.prop"
               echo "description=Systemless bind-mount module for Morphe patched $APP_NAME. Natively uses device Google Play Services." >> "$DIR/module.prop"
               
-              # customize.sh (Handles auto-installation of matching Stock APK to prevent Split APK crashes)
+              # customize.sh (Wipes conflicting play store updates/splits, then streams stock APK)
               echo "#!/system/bin/sh" > "$DIR/customize.sh"
               echo "SKIPUNZIP=0" >> "$DIR/customize.sh"
               echo "ui_print \"- Installing \$APP_NAME Morphe Module...\"" >> "$DIR/customize.sh"
@@ -219,7 +219,10 @@ jobs:
               echo "    ui_print \"- Cannot auto-install Stock APK in Recovery mode.\"" >> "$DIR/customize.sh"
               echo "    ui_print \"- Please make sure the matching stock version is installed manually!\"" >> "$DIR/customize.sh"
               echo "else" >> "$DIR/customize.sh"
-              echo "    ui_print \"- Installing/Updating matching stock \$APP_NAME...\"" >> "$DIR/customize.sh"
+              echo "    ui_print \"- Removing conflicting higher updates and split APKs...\"" >> "$DIR/customize.sh"
+              echo "    pm uninstall \"$PKG_NAME\" >/dev/null 2>&1" >> "$DIR/customize.sh"
+              echo "    pm uninstall --user 0 \"$PKG_NAME\" >/dev/null 2>&1" >> "$DIR/customize.sh"
+              echo "    ui_print \"- Aligning stock \$APP_NAME version...\"" >> "$DIR/customize.sh"
               echo "    if [ -f \"\$MODPATH/stock.apk\" ]; then" >> "$DIR/customize.sh"
               echo "        APK_SIZE=\$(stat -c %s \"\$MODPATH/stock.apk\")" >> "$DIR/customize.sh"
               echo "        cat \"\$MODPATH/stock.apk\" | pm install -r -d -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/customize.sh"
@@ -229,8 +232,8 @@ jobs:
               echo "    fi" >> "$DIR/customize.sh"
               echo "fi" >> "$DIR/customize.sh"
               
-              # service.sh (Checks app presence, auto-installs stock fallback, and bind-mounts)
-              echo "#/system/bin/sh" > "$DIR/service.sh"
+              # service.sh (Failsafe Shebang bug fixed, clears old oat cache and forces DEX profile re-compilation on boot)
+              echo "#!/system/bin/sh" > "$DIR/service.sh"
               echo "MODDIR=\${0%/*}" >> "$DIR/service.sh"
               echo "PKG=\"\$PKG_NAME\"" >> "$DIR/service.sh"
               echo "while [ \"\$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 3; done" >> "$DIR/service.sh"
@@ -238,20 +241,28 @@ jobs:
               echo "sleep 5" >> "$DIR/service.sh"
               echo "TARGET_PATH=\$(pm path \"\$PKG\" | head -n 1 | cut -d':' -f2)" >> "$DIR/service.sh"
               echo "if [ -z \"\$TARGET_PATH\" ] && [ -f \"\$MODDIR/stock.apk\" ]; then" >> "$DIR/service.sh"
+              echo "    pm uninstall \"\$PKG\" >/dev/null 2>&1" >> "$DIR/service.sh"
+              echo "    pm uninstall --user 0 \"\$PKG\" >/dev/null 2>&1" >> "$DIR/service.sh"
               echo "    APK_SIZE=\$(stat -c %s \"\$MODDIR/stock.apk\")" >> "$DIR/service.sh"
-              echo "    cat \"\$MODDIR/stock.apk\" | pm install -r -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/service.sh"
+              echo "    cat \"\$MODDIR/stock.apk\" | pm install -r -d -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/service.sh"
               echo "    sleep 5" >> "$DIR/service.sh"
               echo "    TARGET_PATH=\$(pm path \"\$PKG\" | head -n 1 | cut -d':' -f2)" >> "$DIR/service.sh"
               echo "fi" >> "$DIR/service.sh"
               echo "if [ -n \"\$TARGET_PATH\" ] && [ -f \"\$TARGET_PATH\" ]; then" >> "$DIR/service.sh"
               echo "    mount -o bind \"\$MODDIR/app.apk\" \"\$TARGET_PATH\"" >> "$DIR/service.sh"
               echo "    chcon u:object_r:apk_data_file:s0 \"\$TARGET_PATH\" 2>/dev/null" >> "$DIR/service.sh"
+              echo "    rm -rf /data/app/*/\"\$PKG\"-*/oat 2>/dev/null" >> "$DIR/service.sh"
+              echo "    rm -rf /data/app/\"\$PKG\"-*/oat 2>/dev/null" >> "$DIR/service.sh"
+              echo "    cmd package compile --reset \"\$PKG\" >/dev/null 2>&1" >> "$DIR/service.sh"
               echo "    am force-stop \"\$PKG\" 2>/dev/null" >> "$DIR/service.sh"
               echo "else" >> "$DIR/service.sh"
               echo "    for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do" >> "$DIR/service.sh"
               echo "        if [ -f \"\$path\" ]; then" >> "$DIR/service.sh"
               echo "            mount -o bind \"\$MODDIR/app.apk\" \"\$path\"" >> "$DIR/service.sh"
               echo "            chcon u:object_r:apk_data_file:s0 \"\$path\" 2>/dev/null" >> "$DIR/service.sh"
+              echo "            rm -rf /data/app/*/\"\$PKG\"-*/oat 2>/dev/null" >> "$DIR/service.sh"
+              echo "            rm -rf /data/app/\"\$PKG\"-*/oat 2>/dev/null" >> "$DIR/service.sh"
+              echo "            cmd package compile --reset \"\$PKG\" >/dev/null 2>&1" >> "$DIR/service.sh"
               echo "            am force-stop \"\$PKG\" 2>/dev/null" >> "$DIR/service.sh"
               echo "            break" >> "$DIR/service.sh"
               echo "        fi" >> "$DIR/service.sh"
@@ -260,6 +271,8 @@ jobs:
               
               # uninstall.sh (Built safely via echo commands)
               echo "#!/system/bin/sh" > "$DIR/uninstall.sh"
+              echo "pm uninstall \"$PKG_NAME\" >/dev/null 2>&1" >> "$DIR/uninstall.sh"
+              echo "pm uninstall --user 0 \"$PKG_NAME\" >/dev/null 2>&1" >> "$DIR/uninstall.sh"
               
               chmod 755 "$DIR/customize.sh" "$DIR/service.sh" "$DIR/uninstall.sh"
               cd "$DIR"
