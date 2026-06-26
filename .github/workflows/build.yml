@@ -41,52 +41,56 @@ jobs:
           echo "Fetching APK directory from Archive.org (jhc-apks)..."
           curl -sL "https://archive.org/metadata/jhc-apks" > jhc_metadata.json
           
-          # Fetch distinct paths for arm64-v8a and armeabi-v7a
-          YT_PATH_64=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*-arm64-v8a\.apk$' | sort -V | tail -n 1)
-          YT_PATH_32=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*-armeabi-v7a\.apk$' | sort -V | tail -n 1)
+          # Fetch latest universal -all.apk paths (with failsafe fallback to standard .apk)
+          YT_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*-all\.apk$' | sort -V | tail -n 1)
+          if [ -z "$YT_PATH" ]; then
+            YT_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*\.apk$' | sort -V | tail -n 1)
+          fi
           
-          YTM_PATH_64=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*-arm64-v8a\.apk$' | sort -V | tail -n 1)
-          YTM_PATH_32=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*-armeabi-v7a\.apk$' | sort -V | tail -n 1)
+          YTM_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*-all\.apk$' | sort -V | tail -n 1)
+          if [ -z "$YTM_PATH" ]; then
+            YTM_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*\.apk$' | sort -V | tail -n 1)
+          fi
           
-          if [ -z "$YT_PATH_64" ] || [ -z "$YT_PATH_32" ]; then echo "Error: YouTube APKs not found!"; exit 1; fi
-          if [ -z "$YTM_PATH_64" ] || [ -z "$YTM_PATH_32" ]; then echo "Error: YT Music APKs not found!"; exit 1; fi
+          if [ -z "$YT_PATH" ] || [ -z "$YTM_PATH" ]; then 
+            echo "Error: YouTube or YT Music APKs not found in metadata!"
+            exit 1
+          fi
           
           # Dynamic Version Extraction
-          YT_VER=$(basename "$YT_PATH_64" | sed -E 's/com\.google\.android\.youtube-([0-9.]+)-.*/\1/')
-          YTM_VER=$(basename "$YTM_PATH_64" | sed -E 's/com\.google\.android\.apps\.youtube\.music-([0-9.]+)-.*/\1/')
+          YT_VER=$(basename "$YT_PATH" | sed -E 's/com\.google\.android\.youtube-([0-9.]+)-.*/\1/')
+          YTM_VER=$(basename "$YTM_PATH" | sed -E 's/com\.google\.android\.apps\.youtube\.music-([0-9.]+)-.*/\1/')
           
           echo "YT_VERSION=$YT_VER" >> $GITHUB_ENV
           echo "YTM_VERSION=$YTM_VER" >> $GITHUB_ENV
           
-          echo "Downloading YouTube APKs..."
-          curl -sL "https://archive.org/download/jhc-apks/$YT_PATH_64" -o apks/youtube_64.apk
-          curl -sL "https://archive.org/download/jhc-apks/$YT_PATH_32" -o apks/youtube_32.apk
+          echo "Downloading YouTube Universal APK..."
+          curl -sL "https://archive.org/download/jhc-apks/$YT_PATH" -o apks/youtube_all.apk
           
-          echo "Downloading YT Music APKs..."
-          curl -sL "https://archive.org/download/jhc-apks/$YTM_PATH_64" -o apks/ytmusic_64.apk
-          curl -sL "https://archive.org/download/jhc-apks/$YTM_PATH_32" -o apks/ytmusic_32.apk
+          echo "Downloading YT Music Universal APK..."
+          curl -sL "https://archive.org/download/jhc-apks/$YTM_PATH" -o apks/ytmusic_all.apk
           
           # Integrity checks
-          if [ ! -s apks/youtube_64.apk ] || [ ! -s apks/ytmusic_64.apk ]; then
-            echo "Error: Failed to download 64-bit APKs!"
+          if [ ! -s apks/youtube_all.apk ] || [ ! -s apks/ytmusic_all.apk ]; then
+            echo "Error: Failed to download universal APKs!"
             exit 1
           fi
 
       - name: Build Non-Root APKs
         run: |
-          # 1. YouTube Non-Root (arm64-v8a and arm-v7a)
+          # 1. YouTube Non-Root (using Morphe striplibs patch to split into native arm64-v8a and arm-v7a)
           echo "Building YouTube Non-Root arm64-v8a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o YouTube-v$YT_VERSION-arm64-v8a-NonRoot.apk apks/youtube_64.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -i "striplibs -arm64-v8a" -o YouTube-v$YT_VERSION-arm64-v8a-NonRoot.apk apks/youtube_all.apk
           
           echo "Building YouTube Non-Root arm-v7a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o YouTube-v$YT_VERSION-arm-v7a-NonRoot.apk apks/youtube_32.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -i "striplibs -armeabi-v7a" -o YouTube-v$YT_VERSION-arm-v7a-NonRoot.apk apks/youtube_all.apk
           
-          # 2. YT Music Non-Root (arm64-v8a and arm-v7a)
+          # 2. YT Music Non-Root
           echo "Building YT Music Non-Root arm64-v8a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o yt-music-v$YTM_VERSION-arm64-v8a-NonRoot.apk apks/ytmusic_64.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -i "striplibs -arm64-v8a" -o yt-music-v$YTM_VERSION-arm64-v8a-NonRoot.apk apks/ytmusic_all.apk
           
           echo "Building YT Music Non-Root arm-v7a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o yt-music-v$YTM_VERSION-arm-v7a-NonRoot.apk apks/ytmusic_32.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -i "striplibs -armeabi-v7a" -o yt-music-v$YTM_VERSION-arm-v7a-NonRoot.apk apks/ytmusic_all.apk
 
       - name: Build Root APKs (For Magisk)
         run: |
@@ -166,11 +170,12 @@ jobs:
             safe_add_exclude "$item" YTM_ARGS
           done
           
+          # Building Root APKs with pure 64-bit libraries (striplibs -arm64-v8a) to completely bypass compatibility crashes on Android 14+
           echo "Building YouTube Root (Native Play Services Only)..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar "${YT_ARGS[@]}" -o YouTube-Root.apk apks/youtube_64.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar "${YT_ARGS[@]}" -i "striplibs -arm64-v8a" -o YouTube-Root.apk apks/youtube_all.apk
           
           echo "Building YT Music Root (Native Play Services Only)..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar "${YTM_ARGS[@]}" -o YTMusic-Root.apk apks/ytmusic_64.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar "${YTM_ARGS[@]}" -i "striplibs -arm64-v8a" -o YTMusic-Root.apk apks/ytmusic_all.apk
 
       - name: Create Magisk Modules
         env:
@@ -182,8 +187,8 @@ jobs:
           build_module() {
               local APP_NAME=$1
               local PKG_NAME=$2
-              local APK_FILE=$3       # Patched Root APK (arm64-v8a)
-              local STOCK_FILE=$4     # Stock APK (arm64-v8a)
+              local APK_FILE=$3       # Patched Root APK (arm64-v8a only)
+              local STOCK_FILE=$4     # Universal Stock APK
               local ID=$5
               local DIR=$6
               local OUT_ZIP=$7        # Explicit Zip File Name
@@ -197,64 +202,84 @@ jobs:
               cp "$APK_FILE" "$DIR/app.apk"
               cp "$STOCK_FILE" "$DIR/stock.apk"
               
-              # module.prop (Built safely via echo commands to prevent heredoc YAML syntax issues)
-              echo "id=$ID" > "$DIR/module.prop"
-              echo "name=$APP_NAME Morphe (Native Root)" >> "$DIR/module.prop"
-              echo "version=1.0.0" >> "$DIR/module.prop"
-              echo "versionCode=$RUN_NUMBER" >> "$DIR/module.prop"
-              echo "author=$ACTOR" >> "$DIR/module.prop"
-              echo "description=Systemless bind-mount module for Morphe patched $APP_NAME. Natively uses device Google Play Services." >> "$DIR/module.prop"
+              # Module info (Safely accessed via bash environment variables)
+              cat << EOF > "$DIR/module.prop"
+          id=$ID
+          name=$APP_NAME Morphe (Native Root)
+          version=1.0.0
+          versionCode=$RUN_NUMBER
+          author=$ACTOR
+          description=Systemless bind-mount module for Morphe patched $APP_NAME. Natively uses device Google Play Services.
+          EOF
               
-              # customize.sh (Built safely via echo commands)
-              echo "#!/system/bin/sh" > "$DIR/customize.sh"
-              echo "SKIPUNZIP=0" >> "$DIR/customize.sh"
-              echo "ui_print \"- Installing \$APP_NAME Morphe Module...\"" >> "$DIR/customize.sh"
-              echo "if [ -z \"\$(pgrep system_server)\" ] || [ -z \"\$(getprop sys.boot_completed)\" ]; then" >> "$DIR/customize.sh"
-              echo "    ui_print \"- WARNING: Flashing in Custom Recovery.\"" >> "$DIR/customize.sh"
-              echo "    ui_print \"- Cannot auto-install Stock APK in Recovery mode.\"" >> "$DIR/customize.sh"
-              echo "    ui_print \"- Please make sure the matching stock version is installed manually!\"" >> "$DIR/customize.sh"
-              echo "else" >> "$DIR/customize.sh"
-              echo "    ui_print \"- Installing/Updating matching stock \$APP_NAME...\"" >> "$DIR/customize.sh"
-              echo "    if [ -f \"\$MODPATH/stock.apk\" ]; then" >> "$DIR/customize.sh"
-              echo "        APK_SIZE=\$(stat -c %s \"\$MODPATH/stock.apk\")" >> "$DIR/customize.sh"
-              echo "        cat \"\$MODPATH/stock.apk\" | pm install -r -d -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/customize.sh"
-              echo "        ui_print \"- Stock APK successfully installed & aligned.\"" >> "$DIR/customize.sh"
-              echo "    else" >> "$DIR/customize.sh"
-              echo "        ui_print \"- ERROR: stock.apk not found!\"" >> "$DIR/customize.sh"
-              echo "    fi" >> "$DIR/customize.sh"
-              echo "fi" >> "$DIR/customize.sh"
+              # customize.sh (Handles auto-installation of matching Stock APK to prevent Split APK crashes)
+              cat << EOF > "$DIR/customize.sh"
+          #!/system/bin/sh
+          SKIPUNZIP=0
+          
+          ui_print "- Installing $APP_NAME Morphe Module..."
+          
+          if [ -z "\$(pgrep system_server)" ] || [ -z "\$(getprop sys.boot_completed)" ]; then
+              ui_print "- WARNING: Flashing in Custom Recovery."
+              ui_print "- Cannot auto-install Stock APK in Recovery mode."
+              ui_print "- Please make sure the matching stock version is installed manually!"
+          else
+              ui_print "- Installing/Updating matching stock $APP_NAME..."
+              if [ -f "\$MODPATH/stock.apk" ]; then
+                  APK_SIZE=\$(stat -c %s "\$MODPATH/stock.apk")
+                  cat "\$MODPATH/stock.apk" | pm install -r -d -S \$APK_SIZE >/dev/null 2>&1
+                  ui_print "- Stock APK successfully installed & aligned."
+              else
+                  ui_print "- ERROR: stock.apk not found!"
+              fi
+          fi
+          EOF
               
-              # service.sh (Built safely via echo commands)
-              echo "#/system/bin/sh" > "$DIR/service.sh"
-              echo "MODDIR=\${0%/*}" >> "$DIR/service.sh"
-              echo "PKG=\"\$PKG_NAME\"" >> "$DIR/service.sh"
-              echo "while [ \"\$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 3; done" >> "$DIR/service.sh"
-              echo "while [ ! -d \"/sdcard/Android\" ]; do sleep 2; done" >> "$DIR/service.sh"
-              echo "sleep 5" >> "$DIR/service.sh"
-              echo "TARGET_PATH=\$(pm path \"\$PKG\" | head -n 1 | cut -d':' -f2)" >> "$DIR/service.sh"
-              echo "if [ -z \"\$TARGET_PATH\" ] && [ -f \"\$MODDIR/stock.apk\" ]; then" >> "$DIR/service.sh"
-              echo "    APK_SIZE=\$(stat -c %s \"\$MODDIR/stock.apk\")" >> "$DIR/service.sh"
-              echo "    cat \"\$MODDIR/stock.apk\" | pm install -r -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/service.sh"
-              echo "    sleep 5" >> "$DIR/service.sh"
-              echo "    TARGET_PATH=\$(pm path \"\$PKG\" | head -n 1 | cut -d':' -f2)" >> "$DIR/service.sh"
-              echo "fi" >> "$DIR/service.sh"
-              echo "if [ -n \"\$TARGET_PATH\" ] && [ -f \"\$TARGET_PATH\" ]; then" >> "$DIR/service.sh"
-              echo "    mount -o bind \"\$MODDIR/app.apk\" \"\$TARGET_PATH\"" >> "$DIR/service.sh"
-              echo "    chcon u:object_r:apk_data_file:s0 \"\$TARGET_PATH\" 2>/dev/null" >> "$DIR/service.sh"
-              echo "    am force-stop \"\$PKG\" 2>/dev/null" >> "$DIR/service.sh"
-              echo "else" >> "$DIR/service.sh"
-              echo "    for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do" >> "$DIR/service.sh"
-              echo "        if [ -f \"\$path\" ]; then" >> "$DIR/service.sh"
-              echo "            mount -o bind \"\$MODDIR/app.apk\" \"\$path\"" >> "$DIR/service.sh"
-              echo "            chcon u:object_r:apk_data_file:s0 \"\$path\" 2>/dev/null" >> "$DIR/service.sh"
-              echo "            am force-stop \"\$PKG\" 2>/dev/null" >> "$DIR/service.sh"
-              echo "            break" >> "$DIR/service.sh"
-              echo "        fi" >> "$DIR/service.sh"
-              echo "    done" >> "$DIR/service.sh"
-              echo "fi" >> "$DIR/service.sh"
-              
-              # uninstall.sh (Built safely via echo commands)
-              echo "#!/system/bin/sh" > "$DIR/uninstall.sh"
+              # service.sh (Checks app presence, auto-installs stock fallback, and bind-mounts)
+              cat << EOF > "$DIR/service.sh"
+          #!/system/bin/sh
+          MODDIR=\${0%/*}
+          PKG="$PKG_NAME"
+          
+          while [ "\$(getprop sys.boot_completed)" != "1" ]; do
+              sleep 3
+          done
+          
+          while [ ! -d "/sdcard/Android" ]; do
+              sleep 2
+          done
+          
+          sleep 5
+          
+          TARGET_PATH=\$(pm path "\$PKG" | head -n 1 | cut -d':' -f2)
+          
+          if [ -z "\$TARGET_PATH" ] && [ -f "\$MODDIR/stock.apk" ]; then
+              APK_SIZE=\$(stat -c %s "\$MODDIR/stock.apk")
+              cat "\$MODDIR/stock.apk" | pm install -r -S \$APK_SIZE >/dev/null 2>&1
+              sleep 5
+              TARGET_PATH=\$(pm path "\$PKG" | head -n 1 | cut -d':' -f2)
+          fi
+          
+          if [ -n "\$TARGET_PATH" ] && [ -f "\$TARGET_PATH" ]; then
+              mount -o bind "\$MODDIR/app.apk" "\$TARGET_PATH"
+              chcon u:object_r:apk_data_file:s0 "\$TARGET_PATH" 2>/dev/null
+              am force-stop "\$PKG" 2>/dev/null
+          else
+              for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do
+                  if [ -f "\$path" ]; then 
+                      mount -o bind "\$MODDIR/app.apk" "\$path"
+                      chcon u:object_r:apk_data_file:s0 "\$path" 2>/dev/null
+                      am force-stop "\$PKG" 2>/dev/null
+                      break
+                  fi
+              done
+          fi
+          EOF
+          
+              # uninstall.sh
+              cat << EOF > "$DIR/uninstall.sh"
+          #!/system/bin/sh
+          EOF
               
               chmod 755 "$DIR/customize.sh" "$DIR/service.sh" "$DIR/uninstall.sh"
               cd "$DIR"
@@ -262,8 +287,9 @@ jobs:
               cd ..
           }
           
-          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "apks/youtube_64.apk" "morphe.yt" "yt-magisk" "YouTube-v$YT_VERSION.zip"
-          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "apks/ytmusic_64.apk" "morphe.ytm" "ytm-magisk" "yt-music-v$YTM_VERSION.zip"
+          # Module bundles are aligned to 64-bit (youtube_all.apk is treated as standard arm64-v8a fallback)
+          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "apks/youtube_all.apk" "morphe.yt" "yt-magisk" "YouTube-v$YT_VERSION.zip"
+          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "apks/ytmusic_all.apk" "morphe.ytm" "ytm-magisk" "yt-music-v$YTM_VERSION.zip"
 
       - name: Generate Changelog and Description
         run: |
