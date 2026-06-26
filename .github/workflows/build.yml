@@ -26,7 +26,6 @@ jobs:
           echo "Fetching Morphe CLI (Latest Stable)..."
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest > cli_api.json
           
-          # Pehle .jar dhoondho, agar na mile toh koi bhi main asset utha lo
           CLI_URL=$(grep "browser_download_url" cli_api.json | cut -d '"' -f 4 | grep "\.jar" | head -n 1)
           if [ -z "$CLI_URL" ]; then
             CLI_URL=$(grep "browser_download_url" cli_api.json | cut -d '"' -f 4 | grep -v "\.json" | head -n 1)
@@ -38,7 +37,6 @@ jobs:
           echo "Fetching Morphe Patches (Latest Stable)..."
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest > patches_api.json
           
-          # Smart Search: .jar -> .rvp -> .mpp -> Any other file (except .json)
           PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.jar" | head -n 1)
           if [ -z "$PATCHES_URL" ]; then
             PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.rvp" | head -n 1)
@@ -51,7 +49,7 @@ jobs:
           fi
           
           if [ -z "$PATCHES_URL" ]; then 
-            echo "Error: Patches file not found in releases!"
+            echo "Error: Patches file not found!"
             exit 1
           fi
           
@@ -71,10 +69,10 @@ jobs:
           curl -sL "https://archive.org/metadata/jhc-apks" > jhc_metadata.json
           
           YT_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*\.apk$' | sort -V | tail -n 1)
-          if [ -z "$YT_PATH" ]; then echo "Error: YouTube APK directory me nahi mila!"; exit 1;fi
+          if [ -z "$YT_PATH" ]; then echo "Error: YouTube APK directory me nahi mila!"; exit 1; fi
           
           YTM_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*\.apk$' | sort -V | tail -n 1)
-          if [ -z "$YTM_PATH" ]; then echo "Error: YT Music APK directory me nahi mila!"; exit 1;fi
+          if [ -z "$YTM_PATH" ]; then echo "Error: YT Music APK directory me nahi mila!"; exit 1; fi
           
           echo "Found Latest YouTube: $YT_PATH"
           echo "Found Latest YT Music: $YTM_PATH"
@@ -105,29 +103,31 @@ jobs:
       - name: Build Root APKs (For Magisk)
         run: |
           echo "Building YouTube Root..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -e gmscore-support -e microg-support -e custom-package-name -o YouTube-Root.apk apks/youtube.apk
+          java -jar tools/cli.jar patch -p tools/patches.jar -e gmscore-support -e "GmsCore support" -e microg-support -e "MicroG support" -e custom-package-name -e "Custom package name" -o YouTube-Root.apk apks/youtube.apk
           
           echo "Building YT Music Root..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -e gmscore-support -e microg-support -e custom-package-name -o YTMusic-Root.apk apks/ytmusic.apk
+          java -jar tools/cli.jar patch -p tools/patches.jar -e gmscore-support -e "GmsCore support" -e microg-support -e "MicroG support" -e custom-package-name -e "Custom package name" -o YTMusic-Root.apk apks/ytmusic.apk
 
       - name: Create Magisk Modules
         run: |
-          echo "Building Native Magisk/KernelSU Modules..."
+          echo "Building Native Magisk/KernelSU Modules with Stock Alignment..."
           
           build_module() {
               local APP_NAME=$1
               local PKG_NAME=$2
-              local APK_FILE=$3
-              local ID=$4
-              local DIR=$5
+              local APK_FILE=$3       # Patched Root APK
+              local STOCK_FILE=$4     # Stock APK (from apks/)
+              local ID=$5
+              local DIR=$6
               
               mkdir -p "$DIR/META-INF/com/google/android"
               
-              # Force KernelSU/Magisk to use internal zip extractor
+              # Force KernelSU/Magisk internal zip extractor
               echo "#MAGISK" > "$DIR/META-INF/com/google/android/update-binary"
               echo "#MAGISK" > "$DIR/META-INF/com/google/android/updater-script"
               
               cp "$APK_FILE" "$DIR/app.apk"
+              cp "$STOCK_FILE" "$DIR/stock.apk"
               
               # Module info
               cat << EOF > "$DIR/module.prop"
@@ -136,20 +136,33 @@ jobs:
           version=1.0.0
           versionCode=${{ github.run_number }}
           author=${{ github.actor }}
-          description=Systemless bind-mount module for Morphe patched $APP_NAME. Requires the official app to be installed.
+          description=Systemless bind-mount module for Morphe patched $APP_NAME. Automatically manages stock version matching to prevent crashes.
           EOF
               
-              # Safe customize.sh (No uninstalls of stock apps)
+              # customize.sh (Handles auto-installation of matching Stock APK to prevent Split APK crashes)
               cat << EOF > "$DIR/customize.sh"
           #!/system/bin/sh
           SKIPUNZIP=0
           
           ui_print "- Installing $APP_NAME Morphe Module..."
-          ui_print "- Please make sure the official $APP_NAME is installed on your device."
-          ui_print "- Patched version will be systemlessly mounted at boot time."
+          
+          # Check if custom recovery is used
+          if [ -z "\$(pgrep system_server)" ] || [ -z "\$(getprop sys.boot_completed)" ]; then
+              ui_print "- WARNING: Flashing in Custom Recovery. Cannot auto-install Stock APK."
+              ui_print "- Please make sure the matching stock version is installed manually!"
+          else
+              ui_print "- Installing/Updating matching stock $APP_NAME..."
+              if [ -f "\$MODPATH/stock.apk" ]; then
+                  # Safely install stock apk (it will overwrite split apks correctly)
+                  pm install -r -d "\$MODPATH/stock.apk" >/dev/null 2>&1
+                  ui_print "- Stock APK successfully aligned and installed."
+              else
+                  ui_print "- ERROR: stock.apk not found!"
+              fi
+          fi
           EOF
               
-              # service.sh (Failsafe dynamic mounting after successful boot completed)
+              # service.sh (Checks app presence, auto-installs stock fallback, and bind-mounts)
               cat << EOF > "$DIR/service.sh"
           #!/system/bin/sh
           MODDIR=\${0%/*}
@@ -168,15 +181,22 @@ jobs:
           # Short stabilization delay
           sleep 5
           
-          # Locate official base.apk path using Package Manager
+          # Locate official app path
           TARGET_PATH=\$(pm path "\$PKG" | head -n 1 | cut -d':' -f2)
+          
+          # Fallback: If missing, auto-install stock APK from module
+          if [ -z "\$TARGET_PATH" ] && [ -f "\$MODDIR/stock.apk" ]; then
+              pm install -r "\$MODDIR/stock.apk" >/dev/null 2>&1
+              sleep 3
+              TARGET_PATH=\$(pm path "\$PKG" | head -n 1 | cut -d':' -f2)
+          fi
           
           if [ -n "\$TARGET_PATH" ] && [ -f "\$TARGET_PATH" ]; then
               mount -o bind "\$MODDIR/app.apk" "\$TARGET_PATH"
               chcon u:object_r:apk_data_file:s0 "\$TARGET_PATH" 2>/dev/null
               am force-stop "\$PKG" 2>/dev/null
           else
-              # Fallback to directory scan if pm path has delays
+              # Fallback to directory scan
               for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do
                   if [ -f "\$path" ]; then 
                       mount -o bind "\$MODDIR/app.apk" "\$path"
@@ -188,10 +208,10 @@ jobs:
           fi
           EOF
           
-              # uninstall.sh (Cleanup)
+              # uninstall.sh
               cat << EOF > "$DIR/uninstall.sh"
           #!/system/bin/sh
-          # Mounts are automatically cleared upon rebooting after module removal.
+          # Mounts are automatically cleared upon rebooting.
           EOF
               
               chmod 755 "$DIR/customize.sh" "$DIR/service.sh" "$DIR/uninstall.sh"
@@ -200,8 +220,8 @@ jobs:
               cd ..
           }
           
-          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "morphe.yt" "yt-magisk"
-          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "morphe.ytm" "ytm-magisk"
+          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "apks/youtube.apk" "morphe.yt" "yt-magisk"
+          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "apks/ytmusic.apk" "morphe.ytm" "ytm-magisk"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
