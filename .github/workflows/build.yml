@@ -76,22 +76,25 @@ jobs:
         run: |
           # 1. YouTube Non-Root (arm64-v8a and arm-v7a)
           echo "Building YouTube Non-Root arm64-v8a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o YouTube-v${{ env.YT_VERSION }}-arm64-v8a-NonRoot.apk apks/youtube_64.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -o YouTube-v$YT_VERSION-arm64-v8a-NonRoot.apk apks/youtube_64.apk
           
           echo "Building YouTube Non-Root arm-v7a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o YouTube-v${{ env.YT_VERSION }}-arm-v7a-NonRoot.apk apks/youtube_32.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -o YouTube-v$YT_VERSION-arm-v7a-NonRoot.apk apks/youtube_32.apk
           
           # 2. YT Music Non-Root (arm64-v8a and arm-v7a)
           echo "Building YT Music Non-Root arm64-v8a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o yt-music-v${{ env.YTM_VERSION }}-arm64-v8a-NonRoot.apk apks/ytmusic_64.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -o yt-music-v$YTM_VERSION-arm64-v8a-NonRoot.apk apks/ytmusic_64.apk
           
           echo "Building YT Music Non-Root arm-v7a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar -o yt-music-v${{ env.YTM_VERSION }}-arm-v7a-NonRoot.apk apks/ytmusic_32.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar -o yt-music-v$YTM_VERSION-arm-v7a-NonRoot.apk apks/ytmusic_32.apk
 
       - name: Build Root APKs (For Magisk)
         run: |
+          # Declare a Bash array for dynamic exclude arguments
           declare -a YT_ARGS=()
           declare -a YTM_ARGS=()
+          
+          echo "Scanning patches to dynamically exclude GmsCore/MicroG/Custom Package related patches..."
           
           # Failsafe Patch Listing (tries multiple parameters to never exit with code 2)
           if ! java -jar tools/cli.jar list-patches --patches tools/patches.jar > patches_list.txt 2>/dev/null; then
@@ -170,6 +173,9 @@ jobs:
           java -jar tools/cli.jar patch --patches tools/patches.jar "${YTM_ARGS[@]}" -o YTMusic-Root.apk apks/ytmusic_64.apk
 
       - name: Create Magisk Modules
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          ACTOR: ${{ github.actor }}
         run: |
           echo "Building Native Magisk/KernelSU Modules with Stock Alignment..."
           
@@ -191,13 +197,13 @@ jobs:
               cp "$APK_FILE" "$DIR/app.apk"
               cp "$STOCK_FILE" "$DIR/stock.apk"
               
-              # Module info
+              # Module info (Safely accessed via bash environment variables)
               cat << EOF > "$DIR/module.prop"
           id=$ID
           name=$APP_NAME Morphe (Native Root)
           version=1.0.0
-          versionCode=${{ github.run_number }}
-          author=${{ github.actor }}
+          versionCode=$RUN_NUMBER
+          author=$ACTOR
           description=Systemless bind-mount module for Morphe patched $APP_NAME. Natively uses device Google Play Services.
           EOF
               
@@ -276,15 +282,15 @@ jobs:
               cd ..
           }
           
-          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "apks/youtube_64.apk" "morphe.yt" "yt-magisk" "YouTube-v${{ env.YT_VERSION }}.zip"
-          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "apks/ytmusic_64.apk" "morphe.ytm" "ytm-magisk" "yt-music-v${{ env.YTM_VERSION }}.zip"
+          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "apks/youtube_64.apk" "morphe.yt" "yt-magisk" "YouTube-v$YT_VERSION.zip"
+          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "apks/ytmusic_64.apk" "morphe.ytm" "ytm-magisk" "yt-music-v$YTM_VERSION.zip"
 
       - name: Generate Changelog and Description
         run: |
           cat << EOF > release_notes.txt
 New build ke sath 
-YouTube: ${{ env.YT_VERSION }} (arm-v7a, arm64-v8a)
-YouTube music: ${{ env.YTM_VERSION }} (arm-v7a, arm64-v8a)
+YouTube: $YT_VERSION (arm-v7a, arm64-v8a)
+YouTube music: $YTM_VERSION (arm-v7a, arm64-v8a)
 
 Install MicroG-RE "https://github.com/morpheapp/MicroG-RE/releases" for non-root YouTube and YT Music APKs
 
