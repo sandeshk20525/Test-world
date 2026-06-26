@@ -121,7 +121,7 @@ jobs:
 
       - name: Create Magisk Modules
         run: |
-          echo "Building Advanced Universal Magisk/KernelSU Modules..."
+          echo "Building Ultimate Magisk/KernelSU Modules (Telegram Style)..."
           
           build_module() {
               local APP_NAME=$1
@@ -129,111 +129,119 @@ jobs:
               local APK_FILE=$3
               local ID=$4
               local DIR=$5
-              local SEARCH_STR=$6
               
               mkdir -p "$DIR/META-INF/com/google/android"
+              touch "$DIR/META-INF/com/google/android/updater-script"
               
-              # Official Magisk #MAGISK Header (Ye KernelSU ko force karega apna internal installer use karne ke liye)
+              # 1. Authentic Telegram-Style update-binary wrapper (No fake 'exit 1' traps)
               cat << 'EOF' > "$DIR/META-INF/com/google/android/update-binary"
           #!/system/bin/sh
-          #MAGISK
           OUTFD=$2
           ZIPFILE=$3
+
           ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
-          ui_print "- Error: Root manager too old!"
-          exit 1
+
+          ui_print "- Extracting Morphe Module..."
+
+          if [ -d "/data/adb/ksu" ]; then MODDIR="/data/adb/ksu/modules"; elif [ -d "/data/adb/ap" ]; then MODDIR="/data/adb/ap/modules"; else MODDIR="/data/adb/modules"; fi
+
+          unzip -qo "$ZIPFILE" "module.prop" -d /dev/tmp
+          MODID=$(grep '^id=' /dev/tmp/module.prop | head -n1 | cut -d= -f2 | tr -d '\r')
+          rm -f /dev/tmp/module.prop
+
+          MODPATH="$MODDIR/$MODID"
+          rm -rf "$MODPATH"
+          mkdir -p "$MODPATH"
+
+          ui_print "- Copying files..."
+          unzip -qo "$ZIPFILE" -d "$MODPATH"
+
+          ui_print "- Setting permissions..."
+          chmod -R 755 "$MODPATH"
+          find "$MODPATH" -type f -exec chmod 644 {} +
+          for f in customize.sh post-fs-data.sh uninstall.sh; do
+              [ -f "$MODPATH/$f" ] && chmod 755 "$MODPATH/$f"
+          done
+
+          if [ -f "$MODPATH/customize.sh" ]; then
+              sh "$MODPATH/customize.sh" "$OUTFD" "$ZIPFILE" "$MODPATH"
+          fi
+
+          ui_print "- Installation Complete!"
+          exit 0
           EOF
-              
-              echo "#MAGISK" > "$DIR/META-INF/com/google/android/updater-script"
-              
-              # Ultimate customize.sh (With set +e to bypass KernelSU strict error checking crash)
+          
+              # 2. customize.sh (Handles downgrade and lib extraction just like Telegram build)
               cat << 'EOF' > "$DIR/customize.sh"
           #!/system/bin/sh
-          # CRUCIAL FIX: set +e disables abort-on-error. Iske bina KernelSU choti si galti par crash (Error 1) de deta hai.
-          set +e
-          
           OUTFD=$1
           ZIPFILE=$2
           MODPATH=$3
           
           ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
-          
-          ui_print "***********************************"
-          ui_print "  $APP_NAME Morphe (Advanced Root) "
-          ui_print "***********************************"
-          
           PKGNAME=$(grep '^package=' "$MODPATH/module.prop" | cut -d= -f2 | tr -d '\r')
-          SEARCH_STR=$(grep '^search=' "$MODPATH/module.prop" | cut -d= -f2 | tr -d '\r')
+          
+          ui_print "- Downgrade detected, uninstalling Play Store version..."
+          pm uninstall "$PKGNAME" >/dev/null 2>&1 || true
+          pm uninstall --user 0 "$PKGNAME" >/dev/null 2>&1 || true
           
           ui_print "- Extracting Native Libs..."
-          mkdir -p "$MODPATH/lib/arm64-v8a" "$MODPATH/lib/armeabi-v7a"
-          # || true lagaya hai taaki agar 32-bit libs na mile toh script crash na ho
-          unzip -jo "$MODPATH/app.apk" "lib/arm64-v8a/*" -d "$MODPATH/lib/arm64-v8a" >/dev/null 2>&1 || true
-          unzip -jo "$MODPATH/app.apk" "lib/armeabi-v7a/*" -d "$MODPATH/lib/armeabi-v7a" >/dev/null 2>&1 || true
+          unzip -qo "$MODPATH/app.apk" "lib/*" -d "$MODPATH" 2>/dev/null || true
           
-          ui_print "- Detecting System Architecture & Paths..."
-          SYSPATH=""
-          for path in /system/app/*$SEARCH_STR* /system/product/app/*$SEARCH_STR* /product/app/*$SEARCH_STR* /system_ext/app/*$SEARCH_STR*; do
-              if [ -d "$path" ]; then
-                  SYSPATH="$path"
-                  break
-              fi
-          done
-          
-          if [ -n "$SYSPATH" ]; then
-              ui_print "- System app found at: $SYSPATH"
-              MOD_SYSPATH="$MODPATH$SYSPATH"
-              mkdir -p "$MOD_SYSPATH"
-              
-              APK_NAME=$(basename $(ls $SYSPATH/*.apk 2>/dev/null | head -n 1) 2>/dev/null)
-              if [ -z "$APK_NAME" ] || [ "$APK_NAME" = "*" ]; then APK_NAME="base.apk"; fi
-              
-              mv "$MODPATH/app.apk" "$MOD_SYSPATH/$APK_NAME"
-              
-              ui_print "- Auto-Downgrading Play Store version..."
-              pm uninstall "$PKGNAME" >/dev/null 2>&1 || true
-              pm uninstall --user 0 "$PKGNAME" >/dev/null 2>&1 || true
-          else
-              ui_print "- No System app found! Using Bind-Mount mode..."
-          fi
-          
-          ui_print "- Setting module permissions..."
-          chmod -R 755 "$MODPATH"
-          find "$MODPATH" -type f -exec chmod 644 {} +
-          chmod 755 "$MODPATH/post-fs-data.sh" 2>/dev/null || true
-          
-          ui_print "- Done! Module installed successfully."
-          exit 0
+          ui_print "- Optimizing APK..."
           EOF
-              
-              # module.prop
-              echo -e "id=$ID\npackage=$PKG_NAME\nsearch=$SEARCH_STR\nname=$APP_NAME Morphe (Advanced Root)\nversion=1.0\nauthor=${{ github.actor }}\ndescription=Morphe patched $APP_NAME. Auto-downgrades and dynamically mounts universally." > "$DIR/module.prop"
-              
-              # post-fs-data.sh
+
+              # 3. post-fs-data.sh (Handles Dynamic Bind-Mounts perfectly)
               cat << 'EOF' > "$DIR/post-fs-data.sh"
           #!/system/bin/sh
           MODDIR=${0%/*}
           PKG=$(grep '^package=' "$MODDIR/module.prop" | cut -d= -f2 | tr -d '\r')
           
-          if [ -f "$MODDIR/app.apk" ]; then
-              for path in /data/app/*/$PKG-*/base.apk /data/app/$PKG-*/base.apk; do
-                  if [ -f "$path" ]; then 
+          # Search in data/app first
+          for path in /data/app/*/$PKG-*/base.apk /data/app/$PKG-*/base.apk; do
+              if [ -f "$path" ]; then 
+                  mount -o bind "$MODDIR/app.apk" "$path"
+                  chcon u:object_r:apk_data_file:s0 "$path" 2>/dev/null
+                  exit 0
+              fi
+          done
+          
+          # Search in system/app as fallback
+          for base in "YouTube.apk" "YTMusic.apk" "base.apk"; do
+              for dir in /system/app /system/product/app /product/app /system_ext/app; do
+                  path=$(ls "$dir"/*$PKG*/*$base 2>/dev/null | head -n 1)
+                  if [ -z "$path" ]; then
+                      path=$(ls "$dir"/*YouTube*/*$base 2>/dev/null | head -n 1)
+                  fi
+                  if [ -n "$path" ] && [ -f "$path" ]; then 
                       mount -o bind "$MODDIR/app.apk" "$path"
                       chcon u:object_r:apk_data_file:s0 "$path" 2>/dev/null
+                      exit 0
                   fi
               done
-          fi
+          done
           EOF
           
+              # 4. uninstall.sh (Cleanup script)
+              cat << 'EOF' > "$DIR/uninstall.sh"
+          #!/system/bin/sh
+          MODDIR=${0%/*}
+          PKG=$(grep '^package=' "$MODDIR/module.prop" | cut -d= -f2 | tr -d '\r')
+          pm uninstall "$PKG" >/dev/null 2>&1 || true
+          EOF
+              
+              # Copy APK and create module.prop
               cp "$APK_FILE" "$DIR/app.apk"
+              echo -e "id=$ID\npackage=$PKG_NAME\nname=$APP_NAME Morphe (Telegram Style)\nversion=1.0\nauthor=${{ github.actor }}\ndescription=Telegram-style advanced installer for $APP_NAME. Auto-downgrades and seamlessly mounts." > "$DIR/module.prop"
+              
               cd "$DIR"
-              chmod 755 META-INF/com/google/android/update-binary customize.sh post-fs-data.sh
+              chmod 755 META-INF/com/google/android/update-binary customize.sh post-fs-data.sh uninstall.sh
               zip -r9 "../$ID.zip" .
               cd ..
           }
           
-          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "morphe.yt" "yt-magisk" "YouTube"
-          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "morphe.ytm" "ytm-magisk" "Music"
+          build_module "YouTube" "com.google.android.youtube" "YouTube-Root.apk" "morphe.yt" "yt-magisk"
+          build_module "YT Music" "com.google.android.apps.youtube.music" "YTMusic-Root.apk" "morphe.ytm" "ytm-magisk"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
