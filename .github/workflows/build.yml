@@ -306,9 +306,9 @@ EOF
         with:
           tag_name: "v1.0.${{ github.run_number }}"
           body_path: release_notes.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
-            *NonRoot.apk
+            YouTube-v*-NonRoot.apk
+            yt-music-v*-NonRoot.apk
             YouTube-v*.zip
             yt-music-v*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
