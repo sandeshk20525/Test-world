@@ -69,9 +69,12 @@ jobs:
           
       - name: Build Non-Root APKs
         run: |
-          # Patching process (Explicitly using tools/patches.jar)
-          java -jar tools/cli.jar patch -p tools/patches.jar -o YouTube-NonRoot.apk apks/youtube.apk
-          java -jar tools/cli.jar patch -p tools/patches.jar -o YTMusic-NonRoot.apk apks/ytmusic.apk
+          # CLI Syntax Fix: Input APK ko 'patch' command ke theek baad rakhna zaruri hai taaki PicoCLI crash na ho
+          echo "Building YouTube Non-Root..."
+          java -jar tools/cli.jar patch apks/youtube.apk -p tools/patches.jar -o YouTube-NonRoot.apk
+          
+          echo "Building YT Music Non-Root..."
+          java -jar tools/cli.jar patch apks/ytmusic.apk -p tools/patches.jar -o YTMusic-NonRoot.apk
 
       - name: Build Root APKs (For Magisk)
         run: |
