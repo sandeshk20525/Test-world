@@ -227,7 +227,7 @@ jobs:
               echo "    else" >> "$DIR/customize.sh"
               echo "        ui_print \"- ERROR: stock.apk not found!\"" >> "$DIR/customize.sh"
               echo "    fi" >> "$DIR/customize.sh"
-              fi
+              echo "fi" >> "$DIR/customize.sh"
               
               # service.sh (Failsafe Shebang bug fixed, clears old oat cache and forces DEX profile re-compilation on boot)
               echo "#!/system/bin/sh" > "$DIR/service.sh"
