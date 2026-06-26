@@ -78,19 +78,19 @@ jobs:
 
       - name: Build Non-Root APKs
         run: |
-          # 1. YouTube Non-Root (Using native --striplibs argument)
+          # 1. YouTube Non-Root (Using native --striplibs=<arch> argument with correct '=' sign)
           echo "Building YouTube Non-Root arm64-v8a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs arm64-v8a -o YouTube-v$YT_VERSION-arm64-v8a-NonRoot.apk apks/youtube_all.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs=arm64-v8a -o YouTube-v$YT_VERSION-arm64-v8a-NonRoot.apk apks/youtube_all.apk
           
           echo "Building YouTube Non-Root arm-v7a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs armeabi-v7a -o YouTube-v$YT_VERSION-arm-v7a-NonRoot.apk apks/youtube_32.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs=armeabi-v7a -o YouTube-v$YT_VERSION-arm-v7a-NonRoot.apk apks/youtube_all.apk
           
           # 2. YT Music Non-Root
           echo "Building YT Music Non-Root arm64-v8a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs arm64-v8a -o yt-music-v$YTM_VERSION-arm64-v8a-NonRoot.apk apks/ytmusic_all.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs=arm64-v8a -o yt-music-v$YTM_VERSION-arm64-v8a-NonRoot.apk apks/ytmusic_all.apk
           
           echo "Building YT Music Non-Root arm-v7a..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs armeabi-v7a -o yt-music-v$YTM_VERSION-arm-v7a-NonRoot.apk apks/ytmusic_32.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar --striplibs=armeabi-v7a -o yt-music-v$YTM_VERSION-arm-v7a-NonRoot.apk apks/ytmusic_all.apk
 
       - name: Build Root APKs (For Magisk)
         run: |
@@ -170,12 +170,12 @@ jobs:
             safe_add_exclude "$item" YTM_ARGS
           done
           
-          # Building Root APKs with pure 64-bit libraries (--striplibs arm64-v8a) to completely bypass compatibility crashes on Android 14+
+          # Building Root APKs with pure 64-bit libraries (--striplibs=arm64-v8a) to completely bypass compatibility crashes on Android 14+
           echo "Building YouTube Root (Native Play Services Only)..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar "${YT_ARGS[@]}" --striplibs arm64-v8a -o YouTube-Root.apk apks/youtube_all.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar "${YT_ARGS[@]}" --striplibs=arm64-v8a -o YouTube-Root.apk apks/youtube_all.apk
           
           echo "Building YT Music Root (Native Play Services Only)..."
-          java -jar tools/cli.jar patch --patches tools/patches.jar "${YTM_ARGS[@]}" --striplibs arm64-v8a -o YTMusic-Root.apk apks/ytmusic_all.apk
+          java -jar tools/cli.jar patch --patches tools/patches.jar "${YTM_ARGS[@]}" --striplibs=arm64-v8a -o YTMusic-Root.apk apks/ytmusic_all.apk
 
       - name: Create Magisk Modules
         env:
@@ -202,7 +202,7 @@ jobs:
               cp "$APK_FILE" "$DIR/app.apk"
               cp "$STOCK_FILE" "$DIR/stock.apk"
               
-              # module.prop (Built safely via echo commands to prevent heredoc YAML syntax issues)
+              # Module info (Safely accessed via bash environment variables)
               echo "id=$ID" > "$DIR/module.prop"
               echo "name=$APP_NAME Morphe (Native Root)" >> "$DIR/module.prop"
               echo "version=1.0.0" >> "$DIR/module.prop"
@@ -227,7 +227,7 @@ jobs:
               echo "    else" >> "$DIR/customize.sh"
               echo "        ui_print \"- ERROR: stock.apk not found!\"" >> "$DIR/customize.sh"
               echo "    fi" >> "$DIR/customize.sh"
-              echo "fi" >> "$DIR/customize.sh"
+              fi
               
               # service.sh (Failsafe Shebang bug fixed, clears old oat cache and forces DEX profile re-compilation on boot)
               echo "#!/system/bin/sh" > "$DIR/service.sh"
@@ -261,7 +261,7 @@ jobs:
               echo "            am force-stop \"\$PKG\" 2>/dev/null" >> "$DIR/service.sh"
               echo "            break" >> "$DIR/service.sh"
               echo "        fi" >> "$DIR/service.sh"
-              done >> "$DIR/service.sh"
+              echo "    done" >> "$DIR/service.sh"
               echo "fi" >> "$DIR/service.sh"
               
               # uninstall.sh (Built safely via echo commands)
