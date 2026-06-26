@@ -106,7 +106,7 @@ jobs:
           # Declare a Bash array for dynamic exclude arguments
           declare -a EXCLUDE_ARGS=()
           
-          echo "Scanning patches to dynamically exclude GmsCore/MicroG/Custom Package related patches..."
+          echo "Scanning patches to dynamically exclude MicroG RE/GmsCore/Custom Package related patches..."
           
           # Failsafe Patch Listing (tries multiple parameters to never exit with code 2)
           if ! java -jar tools/cli.jar list-patches --patches tools/patches.jar > patches_list.txt 2>/dev/null; then
@@ -115,18 +115,18 @@ jobs:
             fi
           fi
           
-          # Read list and add any GmsCore/MicroG/Package Name related patches to array
+          # Read list and add any MicroG-RE/GmsCore/GMS/Package Name related patches to array with '-d' (to disable them)
           while IFS= read -r line; do
-            if echo "$line" | grep -qiE "gmscore|microg|package name|custom branding|custom package"; then
+            if echo "$line" | grep -qiE "gmscore|microg|package name|custom branding|custom package|gms"; then
               CLEAN_NAME=$(echo "$line" | sed -E 's/^(INFO: |Name: |- |Patch: |  Name: )//I' | sed -E 's/ \((experimental|recommended)\)//I' | sed -E 's/^"|"$//g' | xargs)
               if [ -n "$CLEAN_NAME" ]; then
                 echo "Adding dynamic exclusion: $CLEAN_NAME"
-                EXCLUDE_ARGS+=("-e" "$CLEAN_NAME")
+                EXCLUDE_ARGS+=("-d" "$CLEAN_NAME")
               fi
             fi
           done < patches_list.txt
           
-          # Fallback standard exclusions just in case
+          # Fallback standard exclusions using '-d' (to disable GmsCore/MicroG requirements)
           FALLBACKS=(
             "GmsCore support" "gmscore-support"
             "microg-support" "MicroG support"
@@ -135,7 +135,7 @@ jobs:
             "Disable Play Store updates" "disable-play-store-updates"
           )
           for item in "${FALLBACKS[@]}"; do
-            EXCLUDE_ARGS+=("-e" "$item")
+            EXCLUDE_ARGS+=("-d" "$item")
           done
           
           echo "Building YouTube Root (Native Play Services Only)..."
