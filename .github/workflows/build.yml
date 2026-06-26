@@ -24,14 +24,12 @@ jobs:
           mkdir -p tools
           
           echo "Fetching Morphe CLI (Latest Stable)..."
-          # jq parser ki jagah direct grep use kar rahe hain taaki link fail na ho
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest > cli_api.json
-          CLI_URL=$(grep "browser_download_url" cli_api.json | grep "\.jar" | cut -d '"' -f 4 | head -n 1)
           
-          if [ -z "$CLI_URL" ]; then 
-            echo "Error: CLI URL fetch failed! GitHub API Response:"
-            cat cli_api.json
-            exit 1
+          # Pehle .jar dhoondho, agar na mile toh koi bhi main asset utha lo
+          CLI_URL=$(grep "browser_download_url" cli_api.json | cut -d '"' -f 4 | grep "\.jar" | head -n 1)
+          if [ -z "$CLI_URL" ]; then
+            CLI_URL=$(grep "browser_download_url" cli_api.json | cut -d '"' -f 4 | grep -v "\.json" | head -n 1)
           fi
           
           echo "Downloading CLI from: $CLI_URL"
@@ -39,11 +37,18 @@ jobs:
           
           echo "Fetching Morphe Patches (Latest Stable)..."
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest > patches_api.json
-          PATCHES_URL=$(grep "browser_download_url" patches_api.json | grep -E "\.jar|\.rvp" | cut -d '"' -f 4 | head -n 1)
+          
+          # Smart Search: .jar -> .rvp -> Any other file (except .json)
+          PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.jar" | head -n 1)
+          if [ -z "$PATCHES_URL" ]; then
+            PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.rvp" | head -n 1)
+          fi
+          if [ -z "$PATCHES_URL" ]; then
+            PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep -v "\.json" | head -n 1)
+          fi
           
           if [ -z "$PATCHES_URL" ]; then 
-            echo "Error: Patches URL fetch failed! GitHub API Response:"
-            cat patches_api.json
+            echo "Error: Is release me developer ne abhi tak koi patch file upload hi nahi ki hai!"
             exit 1
           fi
           
