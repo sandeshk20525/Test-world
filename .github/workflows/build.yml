@@ -11,10 +11,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Java JDK 17
+      - name: Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'zulu'
 
       - name: Download Morphe Tools
@@ -38,17 +38,20 @@ jobs:
           echo "Fetching Morphe Patches (Latest Stable)..."
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest > patches_api.json
           
-          # Smart Search: .jar -> .rvp -> Any other file (except .json)
+          # Smart Search: .jar -> .rvp -> .mpp -> Any other file (except .json)
           PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.jar" | head -n 1)
           if [ -z "$PATCHES_URL" ]; then
             PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.rvp" | head -n 1)
+          fi
+          if [ -z "$PATCHES_URL" ]; then
+            PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.mpp" | head -n 1)
           fi
           if [ -z "$PATCHES_URL" ]; then
             PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep -v "\.json" | head -n 1)
           fi
           
           if [ -z "$PATCHES_URL" ]; then 
-            echo "Error: Is release me developer ne abhi tak koi patch file upload hi nahi ki hai!"
+            echo "Error: Patches file not found in releases!"
             exit 1
           fi
           
@@ -68,10 +71,10 @@ jobs:
           curl -sL "https://archive.org/metadata/jhc-apks" > jhc_metadata.json
           
           YT_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.youtube/.*\.apk$' | sort -V | tail -n 1)
-          if [ -z "$YT_PATH" ]; then echo "Error: YouTube APK directory me nahi mila!"; exit 1; fi
+          if [ -z "$YT_PATH" ]; then echo "Error: YouTube APK directory me nahi mila!"; exit 1;fi
           
           YTM_PATH=$(jq -r '.files[].name' jhc_metadata.json | grep 'com.google.android.apps.youtube.music/.*\.apk$' | sort -V | tail -n 1)
-          if [ -z "$YTM_PATH" ]; then echo "Error: YT Music APK directory me nahi mila!"; exit 1; fi
+          if [ -z "$YTM_PATH" ]; then echo "Error: YT Music APK directory me nahi mila!"; exit 1;fi
           
           echo "Found Latest YouTube: $YT_PATH"
           echo "Found Latest YT Music: $YTM_PATH"
@@ -109,7 +112,7 @@ jobs:
 
       - name: Create Magisk Modules
         run: |
-          echo "Building Ultimate Native Magisk/KernelSU Modules..."
+          echo "Building Native Magisk/KernelSU Modules..."
           
           build_module() {
               local APP_NAME=$1
@@ -120,7 +123,7 @@ jobs:
               
               mkdir -p "$DIR/META-INF/com/google/android"
               
-              # THE MAGIC FIX: Ye KernelSU ko force karega apna flawless internal extractor use karne ko
+              # Force KernelSU/Magisk to use internal zip extractor
               echo "#MAGISK" > "$DIR/META-INF/com/google/android/update-binary"
               echo "#MAGISK" > "$DIR/META-INF/com/google/android/updater-script"
               
@@ -133,55 +136,65 @@ jobs:
           version=1.0.0
           versionCode=${{ github.run_number }}
           author=${{ github.actor }}
-          description=100% Native KSU/Magisk Module. Automatically uninstalls Play Store updates and seamlessly bind-mounts.
+          description=Systemless bind-mount module for Morphe patched $APP_NAME. Requires the official app to be installed.
           EOF
               
-              # customize.sh (Handles Auto-Downgrade safely)
+              # Safe customize.sh (No uninstalls of stock apps)
               cat << EOF > "$DIR/customize.sh"
           #!/system/bin/sh
           SKIPUNZIP=0
           
-          ui_print "- Uninstalling Play Store updates for $APP_NAME..."
-          pm uninstall "$PKG_NAME" >/dev/null 2>&1 || true
-          pm uninstall --user 0 "$PKG_NAME" >/dev/null 2>&1 || true
-          
-          ui_print "- Permissions applied."
+          ui_print "- Installing $APP_NAME Morphe Module..."
+          ui_print "- Please make sure the official $APP_NAME is installed on your device."
+          ui_print "- Patched version will be systemlessly mounted at boot time."
           EOF
               
-              # post-fs-data.sh (Perfect Dynamic Mount Script)
-              cat << EOF > "$DIR/post-fs-data.sh"
+              # service.sh (Failsafe dynamic mounting after successful boot completed)
+              cat << EOF > "$DIR/service.sh"
           #!/system/bin/sh
           MODDIR=\${0%/*}
           PKG="$PKG_NAME"
           
-          for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do
-              if [ -f "\$path" ]; then 
-                  mount -o bind "\$MODDIR/app.apk" "\$path"
-                  chcon u:object_r:apk_data_file:s0 "\$path" 2>/dev/null
-              fi
+          # Wait for device to complete booting
+          while [ "\$(getprop sys.boot_completed)" != "1" ]; do
+              sleep 3
           done
           
-          for base in "YouTube.apk" "YTMusic.apk" "base.apk"; do
-              for dir in /system/app /system/product/app /product/app /system_ext/app; do
-                  path=\$(ls "\$dir"/*\$PKG*/"\$base" 2>/dev/null | head -n 1)
-                  if [ -z "\$path" ]; then
-                      path=\$(ls "\$dir"/*YouTube*/"\$base" 2>/dev/null | head -n 1)
-                  fi
-                  if [ -n "\$path" ] && [ -f "\$path" ]; then 
+          # Wait for decrypted storage
+          while [ ! -d "/sdcard/Android" ]; do
+              sleep 2
+          done
+          
+          # Short stabilization delay
+          sleep 5
+          
+          # Locate official base.apk path using Package Manager
+          TARGET_PATH=\$(pm path "\$PKG" | head -n 1 | cut -d':' -f2)
+          
+          if [ -n "\$TARGET_PATH" ] && [ -f "\$TARGET_PATH" ]; then
+              mount -o bind "\$MODDIR/app.apk" "\$TARGET_PATH"
+              chcon u:object_r:apk_data_file:s0 "\$TARGET_PATH" 2>/dev/null
+              am force-stop "\$PKG" 2>/dev/null
+          else
+              # Fallback to directory scan if pm path has delays
+              for path in /data/app/*/\$PKG-*/base.apk /data/app/\$PKG-*/base.apk; do
+                  if [ -f "\$path" ]; then 
                       mount -o bind "\$MODDIR/app.apk" "\$path"
                       chcon u:object_r:apk_data_file:s0 "\$path" 2>/dev/null
+                      am force-stop "\$PKG" 2>/dev/null
+                      break
                   fi
               done
-          done
+          fi
           EOF
           
-              # uninstall.sh (Cleanup Script)
+              # uninstall.sh (Cleanup)
               cat << EOF > "$DIR/uninstall.sh"
           #!/system/bin/sh
-          pm uninstall "$PKG_NAME" >/dev/null 2>&1 || true
+          # Mounts are automatically cleared upon rebooting after module removal.
           EOF
               
-              chmod 755 "$DIR/customize.sh" "$DIR/post-fs-data.sh" "$DIR/uninstall.sh"
+              chmod 755 "$DIR/customize.sh" "$DIR/service.sh" "$DIR/uninstall.sh"
               cd "$DIR"
               zip -r9 "../$ID.zip" .
               cd ..
