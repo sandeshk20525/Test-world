@@ -1,16 +1,11 @@
 name: Build Morphe APKs and Magisk Modules
 
 on:
-  workflow_dispatch: # Manual run ke liye (Ye hamesha build karega)
-  schedule:
-    # Ye script har din automatic run hogi (raat 10:30 UTC = subah 4:00 IST)
-    - cron: '30 22 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout Repository
@@ -22,195 +17,115 @@ jobs:
           java-version: '17'
           distribution: 'zulu'
 
-      - name: Download Tools & Check For Updates
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download Morphe Tools
         run: |
           mkdir -p tools
           
-          echo "Downloading CLI..."
-          CLI_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest | grep "browser_download_url.*\.jar" | cut -d '"' -f 4 | head -n 1)
-          CLI_FILENAME=$(basename "$CLI_URL")
-          echo "CLI_FILENAME=$CLI_FILENAME" >> $GITHUB_ENV
+          # 1. CLI Download
+          CLI_URL=$(curl -s https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest | grep "browser_download_url.*\.jar" | cut -d '"' -f 4 | head -n 1)
           wget -qO tools/cli.jar "$CLI_URL"
           
+          # 2. Patches Download (Strictly .jar ya .rvp extension check)
           echo "Downloading Patches..."
-          PATCHES_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest | grep "browser_download_url" | grep -E "\.jar|\.rvp|\.mpp" | cut -d '"' -f 4 | head -n 1)
-          PATCH_FILENAME=$(basename "$PATCHES_URL")
-          echo "PATCH_FILENAME=$PATCH_FILENAME" >> $GITHUB_ENV
+          PATCHES_URL=$(curl -s https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest | grep "browser_download_url" | grep -E "\.jar|\.rvp" | cut -d '"' -f 4 | head -n 1)
           wget -qO tools/patches.jar "$PATCHES_URL"
           
+          # Verification
           if [ ! -s tools/cli.jar ] || [ ! -s tools/patches.jar ]; then 
             echo "Error: Tools download failed or file empty!"; exit 1; 
           fi
-          
-          # Smart Check: Sirf tabhi automatic build hoga jab naya patch available ho
-          if [ "${{ github.event_name }}" == "schedule" ]; then
-             echo "Scheduled run triggered. Checking if patch is new..."
-             LAST_PATCH=$(gh release view --json body -q ".body" 2>/dev/null | grep -oP '\*\*Patches:\*\* MorpheApp/\K[a-zA-Z0-9_.-]+' || true)
-             
-             if [ "$LAST_PATCH" == "$PATCH_FILENAME" ] && [ -n "$LAST_PATCH" ]; then
-                 echo "No new patch found ($PATCH_FILENAME). Skipping today's build."
-                 echo "SKIP_BUILD=true" >> $GITHUB_ENV
-             else
-                 echo "New patch release found! Proceeding with build."
-                 echo "SKIP_BUILD=false" >> $GITHUB_ENV
-             fi
-          else
-             echo "Manual run triggered. Proceeding with build unconditionally."
-             echo "SKIP_BUILD=false" >> $GITHUB_ENV
-          fi
+          echo "Tools verified."
 
-      - name: Download Original APKs & Extract Real Versions
-        if: env.SKIP_BUILD != 'true'
+      - name: Download Original APKs
         run: |
           mkdir -p apks
-          # aapt tool install karna zaroori hai real version nikalne ke liye
-          sudo apt-get update -yqq && sudo apt-get install -y aapt
+          # Archive.org se direct download
+          curl -s "https://archive.org/download/jhc-apks/apks/com.google.android.youtube/youtube_v19.16.39.apk" -o apks/youtube.apk
+          curl -s "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music/ytmusic_v7.05.51.apk" -o apks/ytmusic.apk
           
-          echo "Fetching dynamic links from Archive API for Multiple Architectures..."
-          
-          # 1. YouTube ARM64
-          YT_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep -i "arm64-v8a" | grep "\.apk$" | sort | tail -n 1)
-          if [ -z "$YT_ARM64_PATH" ]; then
-             # Agar arm64 alag se na mile, toh universal (all) apk utha lo
-             YT_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep "\.apk$" | sort | tail -n 1)
-          fi
-          if [ -n "$YT_ARM64_PATH" ]; then
-             echo "Downloading YouTube ARM64: $YT_ARM64_PATH"
-             curl -f -L -s "https://archive.org/download/jhc-apks/$YT_ARM64_PATH" -o apks/youtube_arm64.apk
-             YT_VER=$(aapt dump badging apks/youtube_arm64.apk | grep -oP "versionName='\K[^']+" | head -1)
-             echo "YT_CLEAN_NAME=YouTube-v$YT_VER" >> $GITHUB_ENV
-          else
-             echo "YouTube APK not found!"; exit 1;
-          fi
-
-          # 2. YouTube ARMv7
-          YT_ARMV7_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube" | grep -v "music" | grep -i "armeabi-v7a" | grep "\.apk$" | sort | tail -n 1)
-          if [ -z "$YT_ARMV7_PATH" ]; then
-             echo "ARMv7 not explicitly found, falling back to ARM64/Universal source..."
-             YT_ARMV7_PATH=$YT_ARM64_PATH
-          fi
-          echo "Downloading YouTube ARMv7: $YT_ARMV7_PATH"
-          curl -f -L -s "https://archive.org/download/jhc-apks/$YT_ARMV7_PATH" -o apks/youtube_armv7.apk
-
-          # 3. YT Music ARM64
-          YTM_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep -i "arm64-v8a" | grep "\.apk$" | sort | tail -n 1)
-          if [ -z "$YTM_ARM64_PATH" ]; then
-             YTM_ARM64_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep "\.apk$" | sort | tail -n 1)
-          fi
-          if [ -n "$YTM_ARM64_PATH" ]; then
-             echo "Downloading YT Music ARM64: $YTM_ARM64_PATH"
-             curl -f -L -s "https://archive.org/download/jhc-apks/$YTM_ARM64_PATH" -o apks/ytmusic_arm64.apk
-             YTM_VER=$(aapt dump badging apks/ytmusic_arm64.apk | grep -oP "versionName='\K[^']+" | head -1)
-             echo "YTM_CLEAN_NAME=YTMusic-v$YTM_VER" >> $GITHUB_ENV
-          else
-             echo "YT Music APK not found!"; exit 1;
-          fi
-
-          # 4. YT Music ARMv7
-          YTM_ARMV7_PATH=$(curl -s "https://archive.org/metadata/jhc-apks" | jq -r '.files[].name' | grep -i "youtube.music" | grep -i "armeabi-v7a" | grep "\.apk$" | sort | tail -n 1)
-          if [ -z "$YTM_ARMV7_PATH" ]; then
-             YTM_ARMV7_PATH=$YTM_ARM64_PATH
-          fi
-          echo "Downloading YT Music ARMv7: $YTM_ARMV7_PATH"
-          curl -f -L -s "https://archive.org/download/jhc-apks/$YTM_ARMV7_PATH" -o apks/ytmusic_armv7.apk
-
       - name: Build Non-Root APKs
-        if: env.SKIP_BUILD != 'true'
         run: |
-          echo "Patching YouTube Non-Root (ARM64)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YT_CLEAN_NAME}-arm64-v8a-NonRoot.apk" apks/youtube_arm64.apk
-          
-          echo "Patching YouTube Non-Root (ARMv7)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YT_CLEAN_NAME}-armeabi-v7a-NonRoot.apk" apks/youtube_armv7.apk
-          
-          echo "Patching YT Music Non-Root (ARM64)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YTM_CLEAN_NAME}-arm64-v8a-NonRoot.apk" apks/ytmusic_arm64.apk
-          
-          echo "Patching YT Music Non-Root (ARMv7)..."
-          java -jar tools/cli.jar patch -p tools/patches.jar -o "${YTM_CLEAN_NAME}-armeabi-v7a-NonRoot.apk" apks/ytmusic_armv7.apk
+          # Patching process (Explicitly using tools/patches.jar)
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YouTube-NonRoot.apk apks/youtube.apk
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YTMusic-NonRoot.apk apks/ytmusic.apk
 
       - name: Build Root APKs (For Magisk)
         run: |
-          # Patching with GmsCore Exclude
-          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YouTube-Root.apk apks/youtube.apk
-          java -jar tools/cli.jar patch -p tools/patches.jar -e "GmsCore support" -o YTMusic-Root.apk apks/ytmusic.apk
+          # 1. Exit Code 2 Fix: Using strict '=' syntax (--exclude=) and placing input apk first.
+          # 2. Package Name Fix: Excluding 'custom-package-name' to retain 'com.google.android.youtube'.
+          
+          echo "Building YouTube Root..."
+          java -jar tools/cli.jar patch apks/youtube.apk -p tools/patches.jar -o YouTube-Root.apk \
+            --exclude=gmscore-support \
+            --exclude=microg-support \
+            --exclude=custom-package-name
+          
+          echo "Building YT Music Root..."
+          java -jar tools/cli.jar patch apks/ytmusic.apk -p tools/patches.jar -o YTMusic-Root.apk \
+            --exclude=gmscore-support \
+            --exclude=microg-support \
+            --exclude=custom-package-name
 
       - name: Create Magisk Modules
         run: |
-          # 1. Universal META-INF Installer setup for KernelSU/Magisk/APatch
+          # Advanced Universal Magisk Installer (With post-fs-data.sh hook)
           mkdir -p template/META-INF/com/google/android
           touch template/META-INF/com/google/android/updater-script
+          
           cat << 'EOF' > template/META-INF/com/google/android/update-binary
           #!/system/bin/sh
           OUTFD=$2
           ZIPFILE=$3
           ui_print() { echo -n -e "ui_print $1\n" >&$OUTFD; echo -n -e "ui_print\n" >&$OUTFD; }
-          ui_print "- Installing Morphe Module..."
+          ui_print "- Installing Morphe Root Module..."
           if [ -d "/data/adb/ksu" ]; then MODDIR="/data/adb/ksu/modules"; elif [ -d "/data/adb/ap" ]; then MODDIR="/data/adb/ap/modules"; else MODDIR="/data/adb/modules"; fi
           MODID=$(grep '^id=' "$ZIPFILE" | head -n1 | cut -d= -f2 | tr -d '\r')
           MODPATH="$MODDIR/$MODID"
-          ui_print "- Extracting files..."
           rm -rf "$MODPATH"
           mkdir -p "$MODPATH"
           unzip -o "$ZIPFILE" -x "META-INF/*" -d "$MODPATH" >&2
           chmod -R 755 "$MODPATH"
           find "$MODPATH" -type f -exec chmod 644 {} +
-          chmod +x "$MODPATH/post-fs-data.sh" 2>/dev/null
+          chmod 755 "$MODPATH/post-fs-data.sh" 2>/dev/null
           ui_print "- Done! Please Reboot."
           exit 0
           EOF
-          chmod +x template/META-INF/com/google/android/update-binary
+          chmod 755 template/META-INF/com/google/android/update-binary
 
-          # 2. YouTube Magisk Module (With Advanced Hook Script)
+          # YouTube Root Module Build
           cp -r template yt-magisk
           cp YouTube-Root.apk yt-magisk/YouTube.apk
-          echo -e "id=morphe.yt\nname=YouTube Morphe (Root)\nversion=1.0\nauthor=Builder\ndescription=Morphe patched YouTube. Uses advanced hook script to mount universally." > yt-magisk/module.prop
-          
+          echo -e "id=morphe.yt\nname=YouTube Morphe (Root)\nversion=1.0\nauthor=${{ github.actor }}\ndescription=Morphe patched YouTube." > yt-magisk/module.prop
           cat << 'EOF' > yt-magisk/post-fs-data.sh
           #!/system/bin/sh
           MODDIR=${0%/*}
-          # System paths pe hook karne ke liye
-          for path in /system/app/YouTube/YouTube.apk /system/product/app/YouTube/YouTube.apk /product/app/YouTube/YouTube.apk; do
-              if [ -f "$path" ]; then mount -o bind "$MODDIR/YouTube.apk" "$path"; fi
-          done
-          # Agar user ne Play Store Updates uninstall nahi kiye, toh Data paths pe hook karega
-          for path in /data/app/*/com.google.android.youtube-*/base.apk /data/app/com.google.android.youtube-*/base.apk; do
+          for path in /system/app/YouTube/YouTube.apk /system/product/app/YouTube/YouTube.apk /product/app/YouTube/YouTube.apk /data/app/*YouTube*/base.apk; do
               if [ -f "$path" ]; then mount -o bind "$MODDIR/YouTube.apk" "$path"; fi
           done
           EOF
-          chmod +x yt-magisk/post-fs-data.sh
+          chmod 755 yt-magisk/post-fs-data.sh
           cd yt-magisk && zip -r9 ../YouTube-Magisk.zip . && cd ..
 
-          # 3. YT Music Magisk Module (With Advanced Hook Script)
+          # YT Music Root Module Build
           cp -r template ytm-magisk
           cp YTMusic-Root.apk ytm-magisk/YTMusic.apk
-          echo -e "id=morphe.ytm\nname=YT Music Morphe (Root)\nversion=1.0\nauthor=Builder\ndescription=Morphe patched YT Music. Uses advanced hook script to mount universally." > ytm-magisk/module.prop
-          
+          echo -e "id=morphe.ytm\nname=YT Music Morphe (Root)\nversion=1.0\nauthor=${{ github.actor }}\ndescription=Morphe patched YT Music." > ytm-magisk/module.prop
           cat << 'EOF' > ytm-magisk/post-fs-data.sh
           #!/system/bin/sh
           MODDIR=${0%/*}
-          for path in /system/app/YTMusic/YTMusic.apk /system/product/app/YTMusic/YTMusic.apk /product/app/YTMusic/YTMusic.apk; do
-              if [ -f "$path" ]; then mount -o bind "$MODDIR/YTMusic.apk" "$path"; fi
-          done
-          for path in /data/app/*/com.google.android.apps.youtube.music-*/base.apk /data/app/com.google.android.apps.youtube.music-*/base.apk; do
+          for path in /system/app/YTMusic/YTMusic.apk /system/product/app/YTMusic/YTMusic.apk /product/app/YTMusic/YTMusic.apk /data/app/*Music*/base.apk; do
               if [ -f "$path" ]; then mount -o bind "$MODDIR/YTMusic.apk" "$path"; fi
           done
           EOF
-          chmod +x ytm-magisk/post-fs-data.sh
+          chmod 755 ytm-magisk/post-fs-data.sh
           cd ytm-magisk && zip -r9 ../YTMusic-Magisk.zip . && cd ..
 
       - name: Create GitHub Release
-        if: env.SKIP_BUILD != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: "v1.0.${{ github.run_number }}"
-          name: "morphe ${{ env.BUILD_DATE }}"
-          body_path: release_notes.txt
           files: |
-            *-NonRoot.apk
+            *.apk
             *.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
