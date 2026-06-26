@@ -63,35 +63,49 @@ jobs:
       - name: Download Original APKs
         run: |
           mkdir -p apks
-          # Archive.org se direct download
-          curl -s "https://archive.org/download/jhc-apks/apks/com.google.android.youtube/youtube_v19.16.39.apk" -o apks/youtube.apk
-          curl -s "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music/ytmusic_v7.05.51.apk" -o apks/ytmusic.apk
           
+          # wget automatically follows redirects, ensuring the actual large APK is downloaded, not an HTML page
+          echo "Downloading YouTube APK..."
+          wget -qO apks/youtube.apk "https://archive.org/download/jhc-apks/apks/com.google.android.youtube/youtube_v19.16.39.apk"
+          
+          echo "Downloading YT Music APK..."
+          wget -qO apks/ytmusic.apk "https://archive.org/download/jhc-apks/apks/com.google.android.apps.youtube.music/ytmusic_v7.05.51.apk"
+          
+          # Verification: Check if downloaded file is greater than 10MB to avoid corrupted file errors
+          YT_SIZE=$(stat -c%s "apks/youtube.apk" 2>/dev/null || echo 0)
+          if [ "$YT_SIZE" -lt 10000000 ]; then 
+            echo "Error: YouTube APK download failed or file is corrupted! Fix the Archive.org link."
+            exit 1
+          fi
+          echo "Original APKs downloaded successfully!"
+
       - name: Build Non-Root APKs
         run: |
-          # CLI Syntax Fix: Input APK ko 'patch' command ke theek baad rakhna zaruri hai taaki PicoCLI crash na ho
+          # Original safe syntax for CLI (Placing the input APK at the end)
           echo "Building YouTube Non-Root..."
-          java -jar tools/cli.jar patch apks/youtube.apk -p tools/patches.jar -o YouTube-NonRoot.apk
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YouTube-NonRoot.apk apks/youtube.apk
           
           echo "Building YT Music Non-Root..."
-          java -jar tools/cli.jar patch apks/ytmusic.apk -p tools/patches.jar -o YTMusic-NonRoot.apk
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YTMusic-NonRoot.apk apks/ytmusic.apk
 
       - name: Build Root APKs (For Magisk)
         run: |
-          # 1. Exit Code 2 Fix: Using strict '=' syntax (--exclude=) and placing input apk first.
-          # 2. Package Name Fix: Excluding 'custom-package-name' to retain 'com.google.android.youtube'.
+          # 1. Using strict '=' syntax (--exclude=)
+          # 2. Placing input apk right at the end to ensure PicoCLI parses everything perfectly
           
           echo "Building YouTube Root..."
-          java -jar tools/cli.jar patch apks/youtube.apk -p tools/patches.jar -o YouTube-Root.apk \
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YouTube-Root.apk \
             --exclude=gmscore-support \
             --exclude=microg-support \
-            --exclude=custom-package-name
+            --exclude=custom-package-name \
+            apks/youtube.apk
           
           echo "Building YT Music Root..."
-          java -jar tools/cli.jar patch apks/ytmusic.apk -p tools/patches.jar -o YTMusic-Root.apk \
+          java -jar tools/cli.jar patch -p tools/patches.jar -o YTMusic-Root.apk \
             --exclude=gmscore-support \
             --exclude=microg-support \
-            --exclude=custom-package-name
+            --exclude=custom-package-name \
+            apks/ytmusic.apk
 
       - name: Create Magisk Modules
         run: |
