@@ -210,7 +210,7 @@ jobs:
               echo "author=$ACTOR" >> "$DIR/module.prop"
               echo "description=Systemless bind-mount module for Morphe patched $APP_NAME. Natively uses device Google Play Services." >> "$DIR/module.prop"
               
-              # customize.sh (Aligns stock APK version safely without wiping user data/settings)
+              # customize.sh (Aligns stock APK version safely by removing conflicting splits while PRESERVING user data!)
               echo "#!/system/bin/sh" > "$DIR/customize.sh"
               echo "SKIPUNZIP=0" >> "$DIR/customize.sh"
               echo "ui_print \"- Installing \$APP_NAME Morphe Module...\"" >> "$DIR/customize.sh"
@@ -219,30 +219,51 @@ jobs:
               echo "    ui_print \"- Cannot auto-install Stock APK in Recovery mode.\"" >> "$DIR/customize.sh"
               echo "    ui_print \"- Please make sure the matching stock version is installed manually!\"" >> "$DIR/customize.sh"
               echo "else" >> "$DIR/customize.sh"
-              echo "    ui_print \"- Alinging stock \$APP_NAME version safely (no data wipe)...\"" >> "$DIR/customize.sh"
+              echo "    ui_print \"- Safely removing conflicting split APKs (preserving your data/accounts)...\"" >> "$DIR/customize.sh"
+              echo "    pm uninstall -k \"$PKG_NAME\" >/dev/null 2>&1" >> "$DIR/customize.sh"
+              echo "    ui_print \"- Installing matching stock \$APP_NAME...\"" >> "$DIR/customize.sh"
               echo "    if [ -f \"\$MODPATH/stock.apk\" ]; then" >> "$DIR/customize.sh"
-              echo "        APK_SIZE=\$(stat -c %s \"\$MODPATH/stock.apk\")" >> "$DIR/customize.sh"
-              echo "        cat \"\$MODPATH/stock.apk\" | pm install -r -d -g -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/customize.sh"
-              echo "        ui_print \"- Stock APK successfully installed & aligned.\"" >> "$DIR/customize.sh"
+              echo "        pm install -r -d -g \"\$MODPATH/stock.apk\" >/dev/null 2>&1" >> "$DIR/customize.sh"
+              echo "        rm -rf /data/app/*/\"$PKG_NAME\"-*/oat 2>/dev/null" >> "$DIR/customize.sh"
+              echo "        rm -rf /data/app/\"$PKG_NAME\"-*/oat 2>/dev/null" >> "$DIR/customize.sh"
+              echo "        ui_print \"- Stock APK successfully aligned.\"" >> "$DIR/customize.sh"
               echo "    else" >> "$DIR/customize.sh"
               echo "        ui_print \"- ERROR: stock.apk not found!\"" >> "$DIR/customize.sh"
               echo "    fi" >> "$DIR/customize.sh"
               echo "fi" >> "$DIR/customize.sh"
               
-              # service.sh (Failsafe Shebang bug fixed, clears old oat cache and forces DEX profile re-compilation on boot)
+              # service.sh (Safely uninstalls conflicting splits on boot fallback if needed, mounts, and clears OAT cache)
               echo "#!/system/bin/sh" > "$DIR/service.sh"
               echo "MODDIR=\${0%/*}" >> "$DIR/service.sh"
               echo "PKG=\"\$PKG_NAME\"" >> "$DIR/service.sh"
               echo "while [ \"\$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 3; done" >> "$DIR/service.sh"
               echo "while [ ! -d \"/sdcard/Android\" ]; do sleep 2; done" >> "$DIR/service.sh"
               echo "sleep 5" >> "$DIR/service.sh"
+              
+              # Super-Robust manual & PM directory scanner fallback
               echo "TARGET_PATH=\$(pm path \"\$PKG\" | head -n 1 | cut -d':' -f2)" >> "$DIR/service.sh"
+              echo "if [ -z \"\$TARGET_PATH\" ] || [ ! -f \"\$TARGET_PATH\" ]; then" >> "$DIR/service.sh"
+              echo "    for base in \"base.apk\" \"YouTube.apk\" \"YTMusic.apk\" \"com.google.android.youtube.apk\" \"com.google.android.apps.youtube.music.apk\"; do" >> "$DIR/service.sh"
+              echo "        for dir in /data/app /system/app /system/priv-app /system/product/app /product/app /system_ext/app /vendor/app; do" >> "$DIR/service.sh"
+              echo "            for path in \"\$dir\"/*\"\$PKG\"*/\"\$base\" \"\$dir\"/*\"YouTube\"*/\"\$base\" \"\$dir\"/*\"Music\"*/\"\$base\"; do" >> "$DIR/service.sh"
+              echo "                if [ -f \"\$path\" ]; then" >> "$DIR/service.sh"
+              echo "                    TARGET_PATH=\"\$path\"" >> "$DIR/service.sh"
+              echo "                    break 3" >> "$DIR/service.sh"
+              echo "                fi" >> "$DIR/service.sh"
+              echo "            done" >> "$DIR/service.sh"
+              echo "        done" >> "$DIR/service.sh"
+              echo "    done" >> "$DIR/service.sh"
+              echo "fi" >> "$DIR/service.sh"
+              
+              # If missing, auto-install stock APK safely (preserving data!)
               echo "if [ -z \"\$TARGET_PATH\" ] && [ -f \"\$MODDIR/stock.apk\" ]; then" >> "$DIR/service.sh"
-              echo "    APK_SIZE=\$(stat -c %s \"\$MODDIR/stock.apk\")" >> "$DIR/service.sh"
-              echo "    cat \"\$MODDIR/stock.apk\" | pm install -r -d -g -S \$APK_SIZE >/dev/null 2>&1" >> "$DIR/service.sh"
+              echo "    pm uninstall -k \"\$PKG\" >/dev/null 2>&1" >> "$DIR/service.sh"
+              echo "    pm install -r -d -g \"\$MODDIR/stock.apk\" >/dev/null 2>&1" >> "$DIR/service.sh"
               echo "    sleep 5" >> "$DIR/service.sh"
               echo "    TARGET_PATH=\$(pm path \"\$PKG\" | head -n 1 | cut -d':' -f2)" >> "$DIR/service.sh"
               echo "fi" >> "$DIR/service.sh"
+              
+              # Mount and reset ART caches to enforce patched class loading
               echo "if [ -n \"\$TARGET_PATH\" ] && [ -f \"\$TARGET_PATH\" ]; then" >> "$DIR/service.sh"
               echo "    mount -o bind \"\$MODDIR/app.apk\" \"\$TARGET_PATH\"" >> "$DIR/service.sh"
               echo "    chcon u:object_r:apk_data_file:s0 \"\$TARGET_PATH\" 2>/dev/null" >> "$DIR/service.sh"
