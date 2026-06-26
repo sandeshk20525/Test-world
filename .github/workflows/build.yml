@@ -37,7 +37,6 @@ jobs:
           echo "Fetching Morphe Patches (Latest Stable)..."
           curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest > patches_api.json
           
-          # Smart Search: .jar -> .rvp -> .mpp -> Any other file (except .json)
           PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.jar" | head -n 1)
           if [ -z "$PATCHES_URL" ]; then
             PATCHES_URL=$(grep "browser_download_url" patches_api.json | cut -d '"' -f 4 | grep "\.rvp" | head -n 1)
@@ -103,23 +102,40 @@ jobs:
 
       - name: Build Root APKs (For Magisk)
         run: |
-          # EXCLUDE SPECIFIC MORPHE PATCHES FOR MOUNTING:
-          # Excluded GmsCore, Package Name, Custom Branding, and Play Store updates
-          echo "Building YouTube Root..."
-          java -jar tools/cli.jar patch -p tools/patches.jar \
-            -e "GmsCore support" \
-            -e "Package name of YouTube" \
-            -e "Custom branding" \
-            -e "Disable Play Store updates" \
-            -o YouTube-Root.apk apks/youtube.apk
+          # Declare a Bash array for dynamic exclude arguments
+          declare -a EXCLUDE_ARGS=()
           
-          echo "Building YT Music Root..."
-          java -jar tools/cli.jar patch -p tools/patches.jar \
-            -e "GmsCore support" \
-            -e "Package name of YouTube Music" \
-            -e "Custom branding" \
-            -e "Disable Play Store updates" \
-            -o YTMusic-Root.apk apks/ytmusic.apk
+          echo "Scanning patches to dynamically exclude GmsCore/MicroG/Custom Package related patches..."
+          java -jar tools/cli.jar list-patches -p tools/patches.jar > patches_list.txt
+          
+          # Read list and add any GmsCore/MicroG/Package Name related patches to array
+          while IFS= read -r line; do
+            if echo "$line" | grep -qiE "gmscore|microg|package name|custom branding|custom package"; then
+              CLEAN_NAME=$(echo "$line" | sed -E 's/^(INFO: |Name: |- |Patch: |  Name: )//I' | sed -E 's/ \((experimental|recommended)\)//I' | sed -E 's/^"|"$//g' | xargs)
+              if [ -n "$CLEAN_NAME" ]; then
+                echo "Adding dynamic exclusion: $CLEAN_NAME"
+                EXCLUDE_ARGS+=("-e" "$CLEAN_NAME")
+              fi
+            fi
+          done < patches_list.txt
+          
+          # Fallback standard exclusions just in case
+          FALLBACKS=(
+            "GmsCore support" "gmscore-support"
+            "microg-support" "MicroG support"
+            "Custom branding" "custom-branding"
+            "Change package name" "change-package-name"
+            "Disable Play Store updates" "disable-play-store-updates"
+          )
+          for item in "${FALLBACKS[@]}"; do
+            EXCLUDE_ARGS+=("-e" "$item")
+          done
+          
+          echo "Building YouTube Root (Native Play Services Only)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar "${EXCLUDE_ARGS[@]}" -o YouTube-Root.apk apks/youtube.apk
+          
+          echo "Building YT Music Root (Native Play Services Only)..."
+          java -jar tools/cli.jar patch -p tools/patches.jar "${EXCLUDE_ARGS[@]}" -o YTMusic-Root.apk apks/ytmusic.apk
 
       - name: Create Magisk Modules
         run: |
@@ -149,7 +165,7 @@ jobs:
           version=1.0.0
           versionCode=${{ github.run_number }}
           author=${{ github.actor }}
-          description=Systemless bind-mount module for Morphe patched $APP_NAME. Automatically manages stock version matching to prevent crashes.
+          description=Systemless bind-mount module for Morphe patched $APP_NAME. Natively uses device Google Play Services.
           EOF
               
               # customize.sh (Handles auto-installation of matching Stock APK to prevent Split APK crashes)
